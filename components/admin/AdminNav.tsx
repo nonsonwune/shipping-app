@@ -19,8 +19,33 @@ export default function AdminNav() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push('/admin/login');
+    try {
+      // First, get the current session to make sure there's a valid one
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        // If no session, just redirect
+        router.push('/admin/login');
+        return;
+      }
+      
+      // Use signOut with specific scope (local instead of global)
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      
+      if (error) {
+        console.error('Error signing out:', error.message);
+        // Fallback - try to redirect anyway
+        router.push('/admin/login');
+        return;
+      }
+      
+      // Redirect only after successful sign-out
+      router.push('/admin/login');
+    } catch (error) {
+      console.error('Unexpected error during sign-out:', error);
+      // Fallback redirect
+      router.push('/admin/login');
+    }
   };
 
   return (
@@ -55,6 +80,18 @@ export default function AdminNav() {
               <Package className="h-5 w-5 mr-3" />
               Shipments
             </Link>
+
+            <Link
+              href="/admin/staff"
+              className={`flex items-center px-4 py-2 text-sm rounded-md ${
+                isActive("/admin/staff") 
+                  ? "bg-primary text-white" 
+                  : "text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              <Users className="h-5 w-5 mr-3" />
+              Staff Management
+            </Link>
             
             <Link
               href="/admin/users"
@@ -66,18 +103,6 @@ export default function AdminNav() {
             >
               <Users className="h-5 w-5 mr-3" />
               User Management
-            </Link>
-            
-            <Link
-              href="/admin/staff"
-              className={`flex items-center px-4 py-2 text-sm rounded-md ${
-                isActive("/admin/staff") 
-                  ? "bg-primary text-white" 
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              <Truck className="h-5 w-5 mr-3" />
-              Staff Management
             </Link>
             
             <Link

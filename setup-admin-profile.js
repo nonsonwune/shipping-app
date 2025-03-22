@@ -101,9 +101,7 @@ async function updateProfile(userId) {
       const { error: updateError } = await supabase
         .from('profiles')
         .update({
-          account_type: 'admin',
-          role: 'admin',
-          updated_at: new Date().toISOString()
+          account_type: 'admin'
         })
         .eq('id', userId);
         
@@ -124,9 +122,7 @@ async function updateProfile(userId) {
           first_name: 'Admin',
           last_name: 'User',
           account_type: 'admin',
-          role: 'admin',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          created_at: new Date().toISOString()
         });
         
       if (insertError) {

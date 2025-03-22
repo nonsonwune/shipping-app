@@ -13,6 +13,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AlertTriangle, Save, Lock, RefreshCw, Globe, Truck, Mail, Settings } from "lucide-react"
 import { useRouter } from "next/navigation"
 
+const ADMIN_EMAILS = [
+  'admin@yourcompany.com', 
+  '7umunri@gmail.com',
+  'chuqunonso@gmail.com'
+]; // Add your admin email addresses here
+
 type SystemSettings = {
   id: string
   key: string
@@ -46,40 +52,20 @@ export default function AdminSettings() {
         }
         
         const userId = session.user.id
+        const userEmail = session.user.email || ""
         
-        // Check user role
-        const { data: userRoles, error: roleError } = await supabase
-          .from('user_roles')
-          .select('roles:role_id(name)')
-          .eq('user_id', userId)
-
-        if (roleError) {
-          console.error("Error fetching user roles:", roleError)
-          return
-        }
+        // Skip user_roles table to avoid recursion policy error
+        // Check admin status directly by email instead
+        const isAdmin = ADMIN_EMAILS.includes(userEmail.toLowerCase());
+        const highestRole = isAdmin ? 'admin' : 'user';
         
-        // Extract highest role (admin > staff > user)
-        let highestRole = 'user'
-        userRoles?.forEach(role => {
-          if (role.roles && typeof role.roles === 'object' && 'name' in role.roles) {
-            const roleName = role.roles.name as string
-            if (roleName === 'admin') highestRole = 'admin'
-            else if (roleName === 'staff' && highestRole !== 'admin') highestRole = 'staff'
-          }
-        })
-        
-        setUserRole(highestRole)
-        
-        // If not admin, redirect to dashboard
         if (highestRole !== 'admin') {
-          toast({
-            title: "Access Denied",
-            description: "You don't have permission to access system settings",
-            variant: "destructive"
-          })
+          console.error("User does not have admin role")
           router.push('/admin/dashboard')
           return
         }
+        
+        setUserRole(highestRole)
         
         // Get system settings
         const { data: settingsData, error: settingsError } = await supabase

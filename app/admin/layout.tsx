@@ -22,15 +22,9 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  
-  // Skip authentication for login page
-  const isLoginPage = pathname === '/admin/login';
-  
-  // Early return for login page
-  if (isLoginPage) {
-    return <>{children}</>;
-  }
-
+  const router = useRouter();
+  const supabase = createClientComponentClient<Database>();
+  const sessionChecked = useRef(false);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<{
@@ -38,11 +32,17 @@ export default function AdminLayout({
     email: string;
     role: string;
   } | null>(null);
-  const router = useRouter();
-  const supabase = createClientComponentClient<Database>();
-  const sessionChecked = useRef(false);
+  
+  // Determine if we're on the login page
+  const isLoginPage = pathname === '/admin/login';
 
   useEffect(() => {
+    // On the login page, we don't need to verify admin status
+    if (isLoginPage) {
+      setLoading(false);
+      return;
+    }
+    
     // Prevent duplicate checks and infinite loops
     if (sessionChecked.current) return;
     sessionChecked.current = true;
@@ -54,19 +54,20 @@ export default function AdminLayout({
         if (error) {
           console.error('Error checking session:', error.message);
           setLoading(false);
-          return router.push('/admin/login?error=session_error');
+          router.push('/admin/login?error=session_error');
+          return;
         }
 
         if (!session || !session.user) {
           console.log('No active session - redirecting to admin login');
           setLoading(false);
-          return router.push('/admin/login');
+          router.push('/admin/login');
+          return;
         }
 
         setUser(session.user);
 
-        // Instead of using the edge function that's causing CORS errors,
-        // directly check if email matches admin email list
+        // Check if email matches admin email list
         const userEmail = session.user.email?.toLowerCase();
         const isAdmin = ADMIN_EMAILS.includes(userEmail || '');
         console.log('Admin status:', isAdmin);
@@ -74,7 +75,8 @@ export default function AdminLayout({
         if (!isAdmin) {
           console.error('User does not have admin role');
           setLoading(false);
-          return router.push('/admin/login?error=not_admin');
+          router.push('/admin/login?error=not_admin');
+          return;
         }
 
         // Fetch user profile information
@@ -129,8 +131,14 @@ export default function AdminLayout({
       subscription.unsubscribe();
       sessionChecked.current = false; // Reset on unmount
     };
-  }, [router, supabase]);
+  }, [router, supabase, isLoginPage]);
 
+  // For the login page, just render the children
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
+
+  // Loading state for admin pages
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center">
@@ -140,10 +148,12 @@ export default function AdminLayout({
     );
   }
 
+  // If not loading but user isn't authenticated, show nothing during redirect
   if (!user) {
-    return null; // Don't render anything while redirecting
+    return null;
   }
 
+  // Render the admin layout with navigation and header
   return (
     <div className="flex h-screen bg-gray-100">
       <AdminNav />

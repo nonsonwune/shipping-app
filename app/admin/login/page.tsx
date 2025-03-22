@@ -8,7 +8,7 @@ import { Eye, EyeOff, AlertCircle, Info } from 'lucide-react';
 import Link from 'next/link';
 
 export default function AdminLoginPage() {
-  const [email, setEmail] = useState('chuqunonso@gmail.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -26,7 +26,30 @@ export default function AdminLoginPage() {
     } else if (errorMsg === 'session_error') {
       setError('Session error. Please login again.');
     }
-  }, [searchParams]);
+    
+    // Check if user is already logged in
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        // If already logged in, verify admin status before redirect
+        try {
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('account_type')
+            .eq('id', data.session.user.id)
+            .single();
+            
+          if (profileData?.account_type === 'admin') {
+            router.push('/admin/dashboard');
+          }
+        } catch (error) {
+          console.error('Error checking admin status:', error);
+        }
+      }
+    };
+    
+    checkSession();
+  }, [searchParams, router, supabase]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,8 +57,6 @@ export default function AdminLoginPage() {
     setLoading(true);
     
     try {
-      console.log('Attempting to sign in with:', { email });
-      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -52,16 +73,28 @@ export default function AdminLoginPage() {
         throw new Error('No user returned from sign-in');
       }
       
-      // Skip the role check since it's causing the infinite recursion error
-      // We'll let the admin layout handle the role verification instead
+      // Get user's profile to check if they're an admin
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('account_type')
+        .eq('id', data.user.id)
+        .single();
+        
+      if (profileError) {
+        console.error('Error fetching profile:', profileError);
+        throw new Error('Failed to verify admin status');
+      }
       
-      // Successfully authenticated, redirect to dashboard
-      console.log('Successfully signed in, redirecting to dashboard');
+      if (profileData?.account_type !== 'admin') {
+        // Not an admin, redirect to error page
+        await supabase.auth.signOut();
+        router.push('/admin/login?error=not_admin');
+        return;
+      }
       
-      // Use setTimeout to ensure all state is updated before redirect
-      setTimeout(() => {
-        window.location.href = '/admin/dashboard';
-      }, 500);
+      // Successfully authenticated as admin, redirect to dashboard
+      console.log('Successfully signed in as admin, redirecting to dashboard');
+      router.push('/admin/dashboard');
       
     } catch (error: any) {
       console.error('Admin sign-in error:', error);
@@ -71,29 +104,6 @@ export default function AdminLoginPage() {
       } else {
         setError(error.message || 'An error occurred during sign-in');
       }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleMagicLink = async () => {
-    setError(null);
-    setLoading(true);
-    
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email,
-      });
-      
-      if (error) {
-        console.error('Magic link error:', error.message);
-        throw error;
-      }
-      
-      setInfoMessage('Magic link sent! Check your email inbox and click the link to log in.');
-      
-    } catch (error: any) {
-      setError(error.message || 'Failed to send magic link');
     } finally {
       setLoading(false);
     }
@@ -121,14 +131,6 @@ export default function AdminLoginPage() {
               <span>{infoMessage}</span>
             </div>
           )}
-          
-          <div className="mb-6 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-md">
-            <p className="font-medium">Admin Access Information</p>
-            <p className="text-sm mt-1">
-              Using email: <strong>chuqunonso@gmail.com</strong><br/>
-              This email has been whitelisted in the admin configuration.
-            </p>
-          </div>
           
           <form onSubmit={handleSignIn}>
             <div className="mb-4">
@@ -175,18 +177,9 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 px-4 bg-primary hover:bg-primary-dark text-white font-semibold rounded-md shadow mb-3"
+              className="w-full py-2 px-4 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold rounded-md shadow mb-4 flex items-center justify-center"
             >
-              {loading ? 'Signing in...' : 'Sign In with Password'}
-            </button>
-            
-            <button
-              type="button"
-              onClick={handleMagicLink}
-              disabled={loading}
-              className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-md shadow"
-            >
-              {loading ? 'Processing...' : 'Send Magic Link'}
+              {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
           

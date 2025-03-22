@@ -22,8 +22,33 @@ export default function AdminHeader({ user }: AdminHeaderProps) {
   const supabase = createClientComponentClient();
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push('/admin/login');
+    try {
+      // First, get the current session to make sure there's a valid one
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        // If no session, just redirect
+        router.push('/admin/login');
+        return;
+      }
+      
+      // Use signOut with specific scope (local instead of global)
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      
+      if (error) {
+        console.error('Error signing out:', error.message);
+        // Fallback - try to redirect anyway
+        router.push('/admin/login');
+        return;
+      }
+      
+      // Redirect only after successful sign-out
+      router.push('/admin/login');
+    } catch (error) {
+      console.error('Unexpected error during sign-out:', error);
+      // Fallback redirect
+      router.push('/admin/login');
+    }
   };
 
   const toggleDropdown = () => {

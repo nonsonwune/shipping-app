@@ -3,52 +3,52 @@
 @tailwind utilities;
 
 :root {
-  --primary: 37 99 235; /* Changed to blue-600 */
-  --primary-foreground: 255 255 255;
-  --secondary: 255 204 0;
-  --secondary-foreground: 0 0 0;
-  --background: 255 255 255;
-  --foreground: 0 0 0;
-  --muted: 241 245 249;
-  --muted-foreground: 100 116 139;
-  --accent: 241 245 249;
-  --accent-foreground: 37 99 235; /* Changed to blue-600 */
-  --destructive: 239 68 68;
-  --destructive-foreground: 255 255 255;
-  --border: 203 213 225; /* Made darker */
-  --input: 203 213 225; /* Made darker */
-  --ring: 37 99 235; /* Changed to blue-600 */
+  --primary: 37 99 235; /* Blue-600 */
+  --primary-foreground: 255 255 255; /* White */
+  --secondary: 255 204 0; /* Yellow */
+  --secondary-foreground: 0 0 0; /* Black */
+  --background: 255 255 255; /* White */
+  --foreground: 0 0 0; /* Black */
+  --muted: 241 245 249; /* Gray-100 */
+  --muted-foreground: 100 116 139; /* Gray-500 */
+  --accent: 241 245 249; /* Gray-100 */
+  --accent-foreground: 37 99 235; /* Blue-600 */
+  --destructive: 239 68 68; /* Red-500 */
+  --destructive-foreground: 255 255 255; /* White */
+  --border: 203 213 225; /* Gray-300 */
+  --input: 203 213 225; /* Gray-300 */
+  --ring: 37 99 235; /* Blue-600 */
   --radius: 0.5rem;
   
-  /* Add missing variables */
-  --card: 255 255 255;
-  --card-foreground: 0 0 0;
-  --popover: 255 255 255;
-  --popover-foreground: 0 0 0;
+  /* Add missing variables with proper contrast */
+  --card: 255 255 255; /* White */
+  --card-foreground: 15 23 42; /* Slate-900 */
+  --popover: 255 255 255; /* White */
+  --popover-foreground: 15 23 42; /* Slate-900 */
 }
 
 .dark {
-  --primary: 59 130 246;
-  --primary-foreground: 255 255 255;
-  --secondary: 255 204 0;
-  --secondary-foreground: 0 0 0;
-  --background: 15 23 42;
-  --foreground: 255 255 255;
-  --muted: 30 41 59;
-  --muted-foreground: 148 163 184;
-  --accent: 30 41 59;
-  --accent-foreground: 59 130 246;
-  --destructive: 239 68 68;
-  --destructive-foreground: 255 255 255;
-  --border: 51 65 85;
-  --input: 51 65 85;
-  --ring: 59 130 246;
+  --primary: 59 130 246; /* Blue-500 */
+  --primary-foreground: 255 255 255; /* White */
+  --secondary: 255 204 0; /* Yellow */
+  --secondary-foreground: 0 0 0; /* Black */
+  --background: 15 23 42; /* Slate-900 */
+  --foreground: 255 255 255; /* White */
+  --muted: 30 41 59; /* Slate-800 */
+  --muted-foreground: 148 163 184; /* Slate-400 */
+  --accent: 30 41 59; /* Slate-800 */
+  --accent-foreground: 59 130 246; /* Blue-500 */
+  --destructive: 239 68 68; /* Red-500 */
+  --destructive-foreground: 255 255 255; /* White */
+  --border: 51 65 85; /* Slate-700 */
+  --input: 51 65 85; /* Slate-700 */
+  --ring: 59 130 246; /* Blue-500 */
   
-  /* Add missing variables */
-  --card: 15 23 42;
-  --card-foreground: 255 255 255;
-  --popover: 15 23 42;
-  --popover-foreground: 255 255 255;
+  /* Add missing variables with proper contrast */
+  --card: 15 23 42; /* Slate-900 */
+  --card-foreground: 241 245 249; /* Slate-100 */
+  --popover: 15 23 42; /* Slate-900 */
+  --popover-foreground: 241 245 249; /* Slate-100 */
 }
 
 @layer base {

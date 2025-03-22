@@ -18,7 +18,11 @@ type Profile = Database['public']['Tables']['profiles']['Row']
 
 // Hard-coded admin emails for verification
 // In production, this would ideally be stored in environment variables
-const ADMIN_EMAILS = ['admin@yourcompany.com'];
+const ADMIN_EMAILS = [
+  'admin@yourcompany.com', 
+  '7umunri@gmail.com',
+  'chuqunonso@gmail.com'
+];
 
 export default function AdminProfileSettings() {
   const router = useRouter()
@@ -172,7 +176,8 @@ export default function AdminProfileSettings() {
         .update({
           first_name: firstName,
           last_name: lastName,
-          phone: phone
+          phone: phone,
+          username: username
         })
         .eq('id', profile.id)
       
@@ -191,7 +196,8 @@ export default function AdminProfileSettings() {
         ...profile,
         first_name: firstName,
         last_name: lastName,
-        phone: phone
+        phone: phone,
+        username: username
       })
       
       toast({
