@@ -46,80 +46,97 @@ const EXCLUDED_PATHS = [
   '.js'
 ];
 
+// Payment verification routes that should be exempt from auth checks
+const PAYMENT_ROUTES = [
+  '/api/payment/verify',
+  '/api/auth/session-recovery', 
+  '/wallet' 
+];
+
 /**
  * Main middleware function to handle authentication and routing
  */
 export async function middleware(req: NextRequest) {
+  // Enhanced debug logging
+  console.log("====== AUTH MIDDLEWARE LOG ======");
+  console.log(`Path: ${req.nextUrl.pathname}`);
+  
   // Get the path requested
   const { pathname } = req.nextUrl;
   
   // Skip middleware for API routes completely
   if (pathname.startsWith('/api/')) {
+    // Except for the session recovery API which should be allowed
+    if (pathname.startsWith('/api/auth/session-recovery')) {
+      console.log("Session recovery API detected, allowing request");
+      return NextResponse.next();
+    }
+    console.log("API route detected, skipping auth middleware");
     return NextResponse.next();
   }
   
   // Skip middleware for excluded paths
   const isExcludedPath = EXCLUDED_PATHS.some(path => pathname.includes(path));
   if (isExcludedPath) {
+    console.log("Excluded path detected, skipping auth middleware");
     return NextResponse.next();
   }
   
-  // Create a NextResponse and Supabase client
-  const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
+  // Special handling for payment verification redirects
+  const url = new URL(req.url);
+  const hasPaymentParams = url.searchParams.has('status') || 
+                         url.searchParams.has('session') || 
+                         url.searchParams.has('reference') ||
+                         url.searchParams.has('trxref');
   
-  // Debug logging
-  console.log('====== AUTH MIDDLEWARE LOG ======');
-  console.log(`Path: ${pathname}`);
-  
-  try {
-    // Get the session from Supabase
-    const { data: { session } } = await supabase.auth.getSession();
-    const sessionExists = !!session;
-    
-    console.log(`Session exists: ${sessionExists}`);
-    console.log('=================================');
-    
-    // Special handling for admin routes - Check roles and permissions
-    if (pathname.startsWith('/admin') && pathname !== '/admin/login') {
-      // Use the specialized role middleware for admin routes
-      return roleMiddleware(req);
-    }
-    
-    // For public paths, no redirection needed regardless of auth status
-    if (PUBLIC_PATHS.includes(pathname) || PUBLIC_PATHS.some(path => pathname.startsWith(`${path}/`))) {
-      // If user is authenticated and trying to access auth pages, redirect to home
-      if (sessionExists && pathname.startsWith('/auth/')) {
-        return NextResponse.redirect(new URL('/', req.url));
-      }
-      
-      // Otherwise, allow access to the public path
-      return res;
-    }
-    
-    // For protected routes, redirect to login if not authenticated
-    if (!sessionExists) {
-      console.log('No session found, redirecting to login');
-      
-      // Different redirect based on path type
-      if (pathname.startsWith('/admin')) {
-        return NextResponse.redirect(new URL('/admin/login', req.url));
-      } else {
-        return NextResponse.redirect(new URL('/auth/sign-in', req.url));
-      }
-    }
-    
-    // User is authenticated, allow access
-    return res;
-  } catch (error) {
-    console.error('Middleware error:', error);
-    
-    // On error, redirect to login as a fallback
-    if (pathname.startsWith('/admin')) {
-      return NextResponse.redirect(new URL('/admin/login', req.url));
-    }
-    return NextResponse.redirect(new URL('/auth/sign-in', req.url));
+  if (pathname === '/wallet' && hasPaymentParams) {
+    console.log('Payment verification redirect detected, skipping auth check');
+    return NextResponse.next();
   }
+  
+  // Check for recovery cookies
+  const authRecoveryCookie = req.cookies.get('auth_recovery');
+  const paystackSessionCookie = req.cookies.get('paystack_session');
+  
+  if (authRecoveryCookie?.value === 'true' || paystackSessionCookie) {
+    console.log('Session recovery cookies detected, skipping auth check');
+    return NextResponse.next();
+  }
+  
+  // Check if the path is public
+  const isPublicPath = PUBLIC_PATHS.some(path => pathname.startsWith(path));
+  if (isPublicPath) {
+    console.log("Public path detected, skipping auth check");
+    return NextResponse.next();
+  }
+  
+  // Initialize Supabase client with the request
+  const supabase = createMiddlewareClient({ req, res: NextResponse.next() });
+  
+  // Get the session from Supabase
+  const { data: { session }, error } = await supabase.auth.getSession();
+  
+  console.log(`Session exists: ${!!session}`);
+  console.log("=================================");
+  
+  // If no session and not a public path, redirect to sign in
+  if (!session && !isPublicPath) {
+    const redirectUrl = new URL('/auth/sign-in', req.url);
+    
+    // Add the original URL as a query parameter for redirect after login
+    redirectUrl.searchParams.set('redirectTo', req.nextUrl.pathname);
+    
+    console.log(`No session, redirecting to ${redirectUrl.pathname}`);
+    return NextResponse.redirect(redirectUrl);
+  }
+  
+  // Check role-based permissions for admin paths
+  if (session && ADMIN_PATHS.some(path => pathname.startsWith(path))) {
+    return roleMiddleware(req);
+  }
+  
+  // Continue to the requested page
+  return NextResponse.next();
 }
 
 export const config = {

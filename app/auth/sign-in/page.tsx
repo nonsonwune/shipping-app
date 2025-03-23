@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Eye, EyeOff } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createBrowserClient } from "@/lib/supabase"
 
 export default function SignInPage() {
   const router = useRouter()
@@ -30,7 +30,8 @@ export default function SignInPage() {
         console.log("Checking for existing session on page load");
         setCheckingSession(true);
         
-        // Check for active session and redirect if found
+        // Create client and check for active session
+        const supabase = createBrowserClient();
         const { data } = await supabase.auth.getSession();
         const session = data.session;
         console.log("Session check result:", session ? "Session exists" : "No session");
@@ -64,6 +65,7 @@ export default function SignInPage() {
 
     try {
       console.log("Calling supabase.auth.signInWithPassword with:", { email })
+      const supabase = createBrowserClient();
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,

@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Database } from '@/types/supabase';
 import { Eye, EyeOff, AlertCircle, Info } from 'lucide-react';
 import Link from 'next/link';
 
-export default function AdminLoginPage() {
+// Component that uses searchParams
+function AdminLoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,11 +21,13 @@ export default function AdminLoginPage() {
 
   useEffect(() => {
     // Check for error messages in the URL
-    const errorMsg = searchParams.get('error');
-    if (errorMsg === 'not_admin') {
-      setError('Your account does not have admin privileges.');
-    } else if (errorMsg === 'session_error') {
-      setError('Session error. Please login again.');
+    if (searchParams) {
+      const errorMsg = searchParams.get('error');
+      if (errorMsg === 'not_admin') {
+        setError('Your account does not have admin privileges.');
+      } else if (errorMsg === 'session_error') {
+        setError('Session error. Please login again.');
+      }
     }
     
     // Check if user is already logged in
@@ -191,5 +194,21 @@ export default function AdminLoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Main page component with Suspense boundary
+export default function AdminLoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+        <div className="w-full max-w-md text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <AdminLoginForm />
+    </Suspense>
   );
 }

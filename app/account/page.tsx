@@ -17,9 +17,11 @@ import {
   Gift,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
-import { supabase } from "@/lib/supabase"
+import { createBrowserClient, safeQuerySingle } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
-import type { UserProfile } from "@/lib/supabase"
+import type { Database } from "@/types/supabase"
+
+type UserProfile = Database['public']['Tables']['profiles']['Row']
 
 export default function AccountPage() {
   const router = useRouter()
@@ -29,6 +31,7 @@ export default function AccountPage() {
   useEffect(() => {
     async function getProfile() {
       try {
+        const supabase = createBrowserClient();
         const {
           data: { session },
         } = await supabase.auth.getSession()
@@ -38,7 +41,13 @@ export default function AccountPage() {
           return
         }
 
-        const { data, error } = await supabase.from("profiles").select("*").eq("id", session.user.id).single()
+        // Use safeQuerySingle to handle potential 406 errors gracefully
+        const { data, error } = await safeQuerySingle(
+          supabase,
+          "profiles",
+          "*",
+          { id: session.user.id }
+        )
 
         if (error) {
           throw error
@@ -56,6 +65,7 @@ export default function AccountPage() {
   }, [router])
 
   const handleSignOut = async () => {
+    const supabase = createBrowserClient();
     await supabase.auth.signOut()
     router.push("/auth/sign-in")
   }

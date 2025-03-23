@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Eye, EyeOff, ArrowLeft } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createBrowserClient } from "@/lib/supabase"
 
 export default function SignUpPage() {
   const router = useRouter()
@@ -57,6 +57,7 @@ export default function SignUpPage() {
 
     try {
       // For development, we'll create a user with automatic confirmation
+      const supabase = createBrowserClient();
       const { data, error } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,

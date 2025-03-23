@@ -5,12 +5,12 @@
 :root {
   --primary: 37 99 235; /* Blue-600 */
   --primary-foreground: 255 255 255; /* White */
-  --secondary: 255 204 0; /* Yellow */
+  --secondary: 243 244 246; /* Gray-100 */
   --secondary-foreground: 0 0 0; /* Black */
   --background: 255 255 255; /* White */
-  --foreground: 0 0 0; /* Black */
+  --foreground: 31 41 55; /* Gray-800 - Darker for better contrast */
   --muted: 241 245 249; /* Gray-100 */
-  --muted-foreground: 100 116 139; /* Gray-500 */
+  --muted-foreground: 75 85 99; /* Gray-600 - Darker for better contrast */
   --accent: 241 245 249; /* Gray-100 */
   --accent-foreground: 37 99 235; /* Blue-600 */
   --destructive: 239 68 68; /* Red-500 */
@@ -30,8 +30,8 @@
 .dark {
   --primary: 59 130 246; /* Blue-500 */
   --primary-foreground: 255 255 255; /* White */
-  --secondary: 255 204 0; /* Yellow */
-  --secondary-foreground: 0 0 0; /* Black */
+  --secondary: 30 41 59; /* Slate-800 instead of Yellow */
+  --secondary-foreground: 255 255 255; /* White */
   --background: 15 23 42; /* Slate-900 */
   --foreground: 255 255 255; /* White */
   --muted: 30 41 59; /* Slate-800 */
@@ -68,9 +68,91 @@
   ::placeholder {
     @apply text-slate-500 !important;
   }
+  
+  /* Ensure all text has adequate contrast */
+  .text-gray-500 {
+    @apply text-gray-600 !important;
+  }
+  
+  /* Fix for white text on white background in light mode */
+  h1, h2, h3, h4, h5, h6, p, span, div, a, button {
+    color: rgb(var(--foreground));
+  }
+  
+  /* Ensure dashboard elements have proper contrast */
+  .dashboard-header, .dashboard-title, .dashboard-welcome {
+    @apply text-gray-900 !important;
+  }
 }
 
 /* Hide navigation bar on auth pages */
 [data-auth-page="true"] .navigation-bar {
   display: none !important;
+}
+
+/* Add mobile styling */
+@media (max-width: 768px) {
+  .container {
+    @apply bg-background;
+  }
+}
+
+/* Ensure text in cards has proper contrast */
+.card, .card-content, .card-header, .card-title {
+  color: rgb(var(--card-foreground));
+}
+
+/* Fix for tab triggers and content contrast */
+.tabs-trigger, .tabs-content {
+  color: rgb(var(--foreground));
+}
+
+/* Ensure buttons have proper contrast */
+button, .button {
+  color: currentColor;
+}
+
+/* Fix for badges to ensure text is visible */
+.badge {
+  color: currentColor !important;
+}
+
+/* TARGETED FIX FOR DASHBOARD TEXT */
+.container h1,
+.container p,
+.card-title,
+p.text-gray-500,
+.text-gray-500,
+.text-gray-600,
+header h1,
+header p {
+  color: #1F2937 !important; /* Gray-800 */
+}
+
+/* Fix for "Welcome back, Name" text */
+header p.text-gray-500 {
+  color: #1F2937 !important; 
+}
+
+/* Fix for card descriptions */
+.card p,
+.card span,
+.card div {
+  color: #1F2937 !important; /* Gray-800 */
+}
+
+/* Fix dashboard main screen */
+.dashboard-page * {
+  color: #1F2937; 
+}
+
+/* Force text to be visible */
+:not(.dark) * {
+  text-shadow: 0 0 0 #1F2937;
+}
+
+/* Specific fix for any remaining white-on-white text */
+body:not(.dark) span,
+body:not(.dark) p {
+  color: #1F2937 !important;
 }

@@ -1,12 +1,106 @@
-import { createClient } from "@supabase/supabase-js"
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
-import type { Database } from "@/types/supabase"
+/**
+ * Supabase client exports (BROWSER-SAFE)
+ * 
+ * ⚠️ WARNING: This file is being refactored to the lib/supabase/ folder structure.
+ * For new code, use the specific imports from lib/supabase/ subfolders.
+ */
 
-// Environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+// Only include browser-safe imports 
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import type { Database } from '@/types/supabase'
 
-// Define custom user metadata type
+// Environment variables that are safe for client use
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+// Singleton instance for client components
+let clientInstance: ReturnType<typeof createClientComponentClient<Database>> | null = null
+
+/**
+ * Creates a Supabase client for client components with singleton pattern
+ * Use this in client components (React components with 'use client')
+ */
+export function createBrowserClient() {
+  if (clientInstance) return clientInstance
+  
+  clientInstance = createClientComponentClient<Database>()
+  return clientInstance
+}
+
+/**
+ * Helper function to handle 406 errors when querying Supabase
+ * Safe to use in both client and server components
+ */
+export async function safeQuerySingle(
+  supabase: any, 
+  table: string, 
+  selectQuery: string | { select: string, eq: string, value: any },
+  conditions?: Record<string, any>
+) {
+  try {
+    // Handle different parameter formats
+    let select = typeof selectQuery === 'string' ? selectQuery : selectQuery.select;
+    let whereField = typeof selectQuery === 'object' ? selectQuery.eq : null;
+    let whereValue = typeof selectQuery === 'object' ? selectQuery.value : null;
+    let whereConditions = conditions || (whereField && whereValue ? { [whereField]: whereValue } : {});
+    
+    // First check if the table exists with a minimal query
+    const { error: tableCheckError } = await supabase
+      .from(table)
+      .select('id')
+      .limit(1)
+    
+    if (tableCheckError) {
+      console.error(`Table check error for ${table}:`, tableCheckError)
+      return null
+    }
+    
+    // Now perform the actual query with the specified column
+    const { data, error } = await supabase
+      .from(table)
+      .select(select)
+      .match(whereConditions)
+      .single()
+    
+    if (error) {
+      // Handle 406 Not Acceptable error specifically
+      if (error.code === '406') {
+        console.warn(`406 error for ${table} query, retrying with '*'`)
+        
+        // Retry with select('*') which usually works
+        const { data: fullData, error: retryError } = await supabase
+          .from(table)
+          .select('*')
+          .match(whereConditions)
+          .single()
+        
+        if (retryError) {
+          console.error(`Retry error for ${table}:`, retryError)
+          return null
+        }
+        
+        return fullData
+      }
+      
+      console.error(`Query error for ${table}:`, error)
+      return null
+    }
+    
+    return data
+  } catch (e) {
+    console.error(`Unexpected error querying ${table}:`, e)
+    return null
+  }
+}
+
+// BACKWARD COMPATIBILITY EXPORTS
+// These are provided for legacy code but should be replaced with the new pattern
+
+// Export a default client for convenience in client components only
+// This is for backward compatibility with existing code
+export const supabase = typeof window !== 'undefined' ? createBrowserClient() : null
+
+// Legacy type exports - these should eventually move to types/supabase
 export type UserMetadata = {
   name?: string
   avatar_url?: string
@@ -15,7 +109,6 @@ export type UserMetadata = {
   account_type?: string
 }
 
-// Define UserProfile type
 export type UserProfile = {
   id: string
   first_name?: string
@@ -26,204 +119,4 @@ export type UserProfile = {
   phone?: string
   account_type?: string
   email?: string
-}
-
-// Create a client for browser-side usage with auth helpers
-export const supabase = createClientComponentClient<Database>()
-
-// Create a direct client for server-side usage
-export const createServerClient = () => {
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
-  })
-}
-
-// Function to check if there's an active session
-export const getActiveSession = async () => {
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) {
-      console.error("Error getting session:", error.message);
-      return null;
-    }
-    return data.session;
-  } catch (error) {
-    console.error("Unexpected error getting session:", error);
-    return null;
-  }
-}
-
-// Helper function to manually set the auth cookie
-export const setAuthCookie = (token: string, expiresIn = 60 * 60 * 24 * 7) => {
-  const expires = new Date(Date.now() + expiresIn * 1000);
-  document.cookie = `sb-auth-token=${token};path=/;expires=${expires.toUTCString()};SameSite=Lax`;
-  return true;
-}
-
-// Helper function to properly store session data
-export const storeSessionData = (session: any) => {
-  if (!session) return false;
-  
-  try {
-    // Store access token in cookie for server-side access
-    setAuthCookie(session.access_token);
-    
-    // Store the session ID in localStorage for better tracking
-    localStorage.setItem('sb-session-id', session.user?.id || '');
-    
-    return true;
-  } catch (error) {
-    console.error('Error storing session data:', error);
-    return false;
-  }
-}
-
-// Function to create a test user for development purposes
-export const createTestUser = async () => {
-  if (process.env.NODE_ENV !== 'development') {
-    console.error('Test user creation only available in development mode');
-    return null;
-  }
-  
-  try {
-    // Create a test admin user (will only work with "DISABLE_SIGNUP=false" in Supabase)
-    // Use a more unique email that's less likely to be blocked
-    const testEmail = `admin_test_${Date.now()}@example.com`;
-    const testPassword = 'Admin123!';
-    
-    // First try to use an existing test admin account if available
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-      email: 'admin@example.com', 
-      password: 'Admin123!'
-    });
-    
-    if (!signInError && signInData.user) {
-      console.log('Existing test admin user found, signed in');
-      return signInData;
-    }
-    
-    // If user doesn't exist or can't sign in, try to create new one
-    console.log('Attempting to create new test admin user...');
-    const { data, error } = await supabase.auth.signUp({
-      email: testEmail,
-      password: testPassword,
-      options: {
-        data: {
-          first_name: 'Admin',
-          last_name: 'User',
-          role: 'admin'
-        }
-      }
-    });
-    
-    if (error) {
-      console.error('Error creating test admin user:', error.message);
-      
-      // Provide a fallback for development - direct login without signup
-      if (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-        console.log('Attempting direct auth using anon key (dev only)...');
-        
-        // This is a development-only approach
-        const directAuth = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-        );
-        
-        // Try to authenticate with default admin credentials
-        const { data: devData } = await directAuth.auth.signInWithPassword({
-          email: 'admin@example.com',
-          password: 'Admin123!'
-        });
-        
-        if (devData?.user) {
-          console.log('Development fallback: Signed in with default credentials');
-          return devData;
-        }
-      }
-      
-      return null;
-    }
-    
-    console.log('Created new test admin user');
-    
-    // Insert the admin role for this user
-    if (data.user) {
-      try {
-        // First, check if the roles table exists and get the admin role
-        const { data: rolesExist } = await supabase
-          .from('roles')
-          .select('*')
-          .limit(1);
-          
-        if (rolesExist && rolesExist.length > 0) {
-          // Get the admin role_id if roles table exists
-          const { data: roleData, error: roleError } = await supabase
-            .from('roles')
-            .select('id')
-            .eq('name', 'admin')
-            .maybeSingle();
-            
-          if (roleData && !roleError) {
-            // Check if user_roles table exists
-            const { data: userRolesExist } = await supabase
-              .from('user_roles')
-              .select('*')
-              .limit(1);
-              
-            if (userRolesExist) {
-              try {
-                // Assign the admin role to the user using proper types
-                const { error: insertError } = await supabase
-                  .from('user_roles')
-                  .insert({
-                    user_id: data.user.id,
-                    role_id: roleData.id
-                  });
-                  
-                if (!insertError) {
-                  console.log('Admin role assigned to test user');
-                } else {
-                  console.error('Error inserting user role:', insertError);
-                }
-              } catch (err) {
-                console.error('Error in user_roles insert operation:', err);
-              }
-            } else {
-              console.log('user_roles table does not exist, skipping role assignment');
-            }
-          } else {
-            console.log('Admin role not found:', roleError);
-          }
-        } else {
-          console.log('Roles table does not exist, skipping role assignment');
-        }
-      } catch (roleError) {
-        console.error('Error assigning admin role:', roleError);
-      }
-    }
-    
-    return data;
-  } catch (error) {
-    console.error('Unexpected error creating test admin:', error);
-    return null;
-  }
-}
-
-// Type for Shipment data
-export type Shipment = {
-  id: string
-  origin: string
-  destination: string
-  status: string
-  tracking_number: string
-  user_id: string
-  estimated_delivery?: string
-  weight?: number
-  dimensions?: string
-  carrier?: string
-  created_at: string
-  updated_at?: string
 }

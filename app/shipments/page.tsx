@@ -1,84 +1,142 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowLeft, Package, Filter, Search } from "lucide-react"
+import { ArrowLeft, Package, Filter, Search, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
+import { supabase } from "@/lib/supabase"
+import { formatDistanceToNow, format } from "date-fns"
 
 export default function ShipmentsPage() {
   const [searchQuery, setSearchQuery] = useState("")
+  const [activeShipments, setActiveShipments] = useState([])
+  const [completedShipments, setCompletedShipments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
-  // Sample shipment data
-  const activeShipments = [
-    {
-      id: "TRK123456789",
-      type: "China Import",
-      status: "In Transit",
-      statusColor: "bg-blue-100 text-blue-800",
-      origin: "Guangzhou, China",
-      destination: "Lagos, Nigeria",
-      date: "Mar 10, 2024",
-      estimatedDelivery: "Apr 15, 2024",
-    },
-    {
-      id: "TRK987654321",
-      type: "Import by Air",
-      status: "Processing",
-      statusColor: "bg-yellow-100 text-yellow-800",
-      origin: "New York, USA",
-      destination: "Lagos, Nigeria",
-      date: "Mar 18, 2024",
-      estimatedDelivery: "Apr 2, 2024",
-    },
-  ]
+  useEffect(() => {
+    async function fetchShipments() {
+      try {
+        setLoading(true)
+        
+        // First check if user is authenticated
+        const { data: { session } } = await supabase.auth.getSession()
+        
+        if (!session) {
+          // Handle unauthenticated state
+          console.error("No session found")
+          setError("Please sign in to view your shipments")
+          setLoading(false)
+          return
+        }
 
-  const completedShipments = [
-    {
-      id: "TRK567891234",
-      type: "Export by Sea",
-      status: "Delivered",
-      statusColor: "bg-green-100 text-green-800",
-      origin: "Lagos, Nigeria",
-      destination: "Rotterdam, Netherlands",
-      date: "Jan 5, 2024",
-      deliveryDate: "Feb 28, 2024",
-    },
-    {
-      id: "TRK456789123",
-      type: "Import by Sea",
-      status: "Delivered",
-      statusColor: "bg-green-100 text-green-800",
-      origin: "Dubai, UAE",
-      destination: "Lagos, Nigeria",
-      date: "Dec 10, 2023",
-      deliveryDate: "Jan 25, 2024",
-    },
-    {
-      id: "TRK345678912",
-      type: "China Import",
-      status: "Delivered",
-      statusColor: "bg-green-100 text-green-800",
-      origin: "Shenzhen, China",
-      destination: "Lagos, Nigeria",
-      date: "Nov 15, 2023",
-      deliveryDate: "Jan 5, 2024",
-    },
-  ]
+        // Fetch shipments with active statuses (not delivered or cancelled)
+        const { data: activeData, error: activeError } = await supabase
+          .from("shipments")
+          .select("*")
+          .not("status", "eq", "delivered")
+          .not("status", "eq", "cancelled")
+          .order("created_at", { ascending: false })
+        
+        if (activeError) {
+          console.error("Error fetching active shipments:", activeError)
+          setError("Failed to load active shipments")
+        } else {
+          setActiveShipments(activeData || [])
+        }
+
+        // Fetch completed shipments (delivered or cancelled)
+        const { data: completedData, error: completedError } = await supabase
+          .from("shipments")
+          .select("*")
+          .or("status.eq.delivered,status.eq.cancelled")
+          .order("updated_at", { ascending: false })
+        
+        if (completedError) {
+          console.error("Error fetching completed shipments:", completedError)
+          setError("Failed to load completed shipments")
+        } else {
+          setCompletedShipments(completedData || [])
+        }
+      } catch (err) {
+        console.error("Error in shipments fetch:", err)
+        setError("An unexpected error occurred")
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchShipments()
+  }, [])
+
+  // Helper to determine status color based on shipment status
+  const getStatusColor = (status) => {
+    if (!status) return "bg-gray-100 text-gray-800"
+    
+    switch(status.toLowerCase()) {
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800'
+      case 'processing':
+        return 'bg-blue-100 text-blue-800'
+      case 'in transit':
+        return 'bg-purple-100 text-purple-800'
+      case 'delivered':
+        return 'bg-green-100 text-green-800'
+      case 'cancelled':
+        return 'bg-red-100 text-red-800'
+      default:
+        return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  // Format date helper
+  const formatDate = (dateString) => {
+    if (!dateString) return "N/A"
+    try {
+      return format(new Date(dateString), 'MMM d, yyyy')
+    } catch (err) {
+      console.error("Date formatting error:", err)
+      return "Invalid date"
+    }
+  }
 
   // Filter shipments based on search query
   const filteredActiveShipments = activeShipments.filter(
     (shipment) =>
-      shipment.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment.type.toLowerCase().includes(searchQuery.toLowerCase()),
+      shipment?.tracking_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.service_type?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.origin?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.destination?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   const filteredCompletedShipments = completedShipments.filter(
     (shipment) =>
-      shipment.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment.type.toLowerCase().includes(searchQuery.toLowerCase()),
+      shipment?.tracking_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.service_type?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.origin?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.destination?.toLowerCase().includes(searchQuery.toLowerCase())
   )
+
+  if (error) {
+    return (
+      <div className="p-4 pb-20">
+        <div className="flex items-center mb-6">
+          <Link href="/" className="mr-4">
+            <ArrowLeft className="w-6 h-6" />
+          </Link>
+          <h1 className="text-2xl font-bold">Shipments</h1>
+        </div>
+        <div className="text-center py-8">
+          <p className="text-red-500 mb-4">{error}</p>
+          <Link href="/">
+            <Button>Return to Dashboard</Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="p-4 pb-20">
@@ -111,18 +169,23 @@ export default function ShipmentsPage() {
         </TabsList>
 
         <TabsContent value="active" className="mt-4">
-          {filteredActiveShipments.length > 0 ? (
+          {loading ? (
+            <div className="flex justify-center items-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <span className="ml-2">Loading shipments...</span>
+            </div>
+          ) : filteredActiveShipments.length > 0 ? (
             <div className="space-y-4">
               {filteredActiveShipments.map((shipment) => (
-                <Link href={`/track-shipment?id=${shipment.id}`} key={shipment.id}>
+                <Link href={`/shipments/${shipment.id}`} key={shipment.id}>
                   <div className="bg-white rounded-xl border border-gray-200 p-4">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <h3 className="font-bold">{shipment.id}</h3>
-                        <p className="text-sm text-gray-500">{shipment.type}</p>
+                        <h3 className="font-bold">#{shipment.tracking_number || shipment.id.slice(0, 8)}</h3>
+                        <p className="text-sm text-gray-500">{shipment.service_type}</p>
                       </div>
-                      <span className={`${shipment.statusColor} text-xs px-2 py-1 rounded-full`}>
-                        {shipment.status}
+                      <span className={`${getStatusColor(shipment.status)} text-xs px-2 py-1 rounded-full`}>
+                        {shipment.status || "Unknown"}
                       </span>
                     </div>
 
@@ -135,19 +198,19 @@ export default function ShipmentsPage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <p className="text-gray-500">Origin</p>
-                        <p className="font-medium">{shipment.origin}</p>
+                        <p className="font-medium">{shipment.origin || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Destination</p>
-                        <p className="font-medium">{shipment.destination}</p>
+                        <p className="font-medium">{shipment.destination || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Date</p>
-                        <p className="font-medium">{shipment.date}</p>
+                        <p className="font-medium">{formatDate(shipment.created_at)}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Est. Delivery</p>
-                        <p className="font-medium">{shipment.estimatedDelivery}</p>
+                        <p className="font-medium">{shipment.estimated_delivery_date ? formatDate(shipment.estimated_delivery_date) : "TBD"}</p>
                       </div>
                     </div>
                   </div>
@@ -159,7 +222,7 @@ export default function ShipmentsPage() {
               <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <h3 className="font-medium text-gray-500 mb-2">No active shipments found</h3>
               <p className="text-sm text-gray-400 mb-4">Start shipping with us today!</p>
-              <Link href="/book-shipment">
+              <Link href="/services">
                 <Button className="bg-primary text-white">Book a Shipment</Button>
               </Link>
             </div>
@@ -167,18 +230,23 @@ export default function ShipmentsPage() {
         </TabsContent>
 
         <TabsContent value="completed" className="mt-4">
-          {filteredCompletedShipments.length > 0 ? (
+          {loading ? (
+            <div className="flex justify-center items-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              <span className="ml-2">Loading shipments...</span>
+            </div>
+          ) : filteredCompletedShipments.length > 0 ? (
             <div className="space-y-4">
               {filteredCompletedShipments.map((shipment) => (
-                <Link href={`/track-shipment?id=${shipment.id}`} key={shipment.id}>
+                <Link href={`/shipments/${shipment.id}`} key={shipment.id}>
                   <div className="bg-white rounded-xl border border-gray-200 p-4">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <h3 className="font-bold">{shipment.id}</h3>
-                        <p className="text-sm text-gray-500">{shipment.type}</p>
+                        <h3 className="font-bold">#{shipment.tracking_number || shipment.id.slice(0, 8)}</h3>
+                        <p className="text-sm text-gray-500">{shipment.service_type}</p>
                       </div>
-                      <span className={`${shipment.statusColor} text-xs px-2 py-1 rounded-full`}>
-                        {shipment.status}
+                      <span className={`${getStatusColor(shipment.status)} text-xs px-2 py-1 rounded-full`}>
+                        {shipment.status || "Unknown"}
                       </span>
                     </div>
 
@@ -191,19 +259,19 @@ export default function ShipmentsPage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <p className="text-gray-500">Origin</p>
-                        <p className="font-medium">{shipment.origin}</p>
+                        <p className="font-medium">{shipment.origin || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Destination</p>
-                        <p className="font-medium">{shipment.destination}</p>
+                        <p className="font-medium">{shipment.destination || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Date</p>
-                        <p className="font-medium">{shipment.date}</p>
+                        <p className="font-medium">{formatDate(shipment.created_at)}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Delivery Date</p>
-                        <p className="font-medium">{shipment.deliveryDate}</p>
+                        <p className="font-medium">{formatDate(shipment.updated_at)}</p>
                       </div>
                     </div>
                   </div>
@@ -222,4 +290,3 @@ export default function ShipmentsPage() {
     </div>
   )
 }
-

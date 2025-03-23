@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/card'
 import { Camera, X, Loader2 } from 'lucide-react'
 import Image from 'next/image'
-import { createClient } from '@/utils/supabase/client'
+import { createBrowserClient } from '@/lib/supabase'
 import { toast } from '@/components/ui/use-toast'
 
 interface ImageUploadProps {
@@ -29,7 +29,8 @@ export function ImageUpload({ onImageUploaded, label = "Upload Package Image", u
   useEffect(() => {
     const getAuthToken = async () => {
       try {
-        const supabase = createClient()
+        // Use the new browser client from our unified architecture
+        const supabase = createBrowserClient()
         const { data: { session } } = await supabase.auth.getSession()
         if (session?.access_token) {
           setAuthToken(session.access_token)

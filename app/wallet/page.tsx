@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { 
   ArrowLeft, 
@@ -19,7 +20,7 @@ import {
   TabsList, 
   TabsTrigger 
 } from "@/components/ui/tabs"
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { createBrowserClient as createClient, checkSession } from "@/utils/supabase/client"
 import { FundWalletModal } from "@/components/fund-wallet-modal"
 import { formatCurrency } from "@/lib/paystack"
 import { useToast } from "@/components/ui/use-toast"
@@ -29,7 +30,10 @@ interface Transaction {
   reference: string
   amount: number
   status: string
-  transaction_type: string
+  transaction_type?: string
+  payment_method?: string
+  type?: string
+  description?: string
   created_at: string
 }
 
@@ -39,115 +43,172 @@ interface Wallet {
 }
 
 export default function WalletPage() {
-  const [walletData, setWalletData] = useState<Wallet | null>(null)
-  const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [pendingTransactions, setPendingTransactions] = useState<Transaction[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [userEmail, setUserEmail] = useState("")
-  const [isFundModalOpen, setIsFundModalOpen] = useState(false)
-  const supabase = createClientComponentClient()
-  const { toast } = useToast()
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [balance, setBalance] = useState(0);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isFundModalOpen, setIsFundModalOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSessionRecoveryAttempted, setIsSessionRecoveryAttempted] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const { toast } = useToast();
 
+  // Handle status and session params from payment verification
+  const status = searchParams?.get("status") || null;
+  const message = searchParams?.get("message") || null;
+  const sessionRecovery = searchParams?.get("session_recovery") || null;
+  const sessionToken = searchParams?.get('session');
+
+  // Check for session recovery from payment verification
   useEffect(() => {
-    async function fetchWalletData() {
-      setIsLoading(true)
+    const attemptSessionRecovery = async () => {
+      // Don't repeat recovery attempts
+      if (isSessionRecoveryAttempted) return;
+      
+      console.log("DEBUG: Attempting session recovery on wallet page");
+      setIsSessionRecoveryAttempted(true);
+      
       try {
-        // Get user session
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session?.user) {
-          throw new Error("User not authenticated")
-        }
-
-        setUserEmail(session.user.email || "")
-
-        // Fetch wallet data
-        const { data: wallet, error: walletError } = await supabase
-          .from("wallets")
-          .select("*")
-          .eq("user_id", session.user.id)
-          .single()
-
-        if (walletError && walletError.code !== "PGRST116") {
-          console.error("Error fetching wallet:", walletError)
-        }
-
-        // Fetch transactions
-        const { data: txData, error: txError } = await supabase
-          .from("transactions")
-          .select("*")
-          .eq("user_id", session.user.id)
-          .order("created_at", { ascending: false })
-
-        if (txError) {
-          console.error("Error fetching transactions:", txError)
-        }
-
-        setWalletData(wallet || { balance: 0, currency: "NGN" })
+        // Use our enhanced session check function
+        const sessionResult = await checkSession();
         
-        if (txData) {
-          setTransactions(txData.filter(tx => tx.status === "completed"))
-          setPendingTransactions(txData.filter(tx => tx.status === "pending"))
+        if (sessionResult.session) {
+          console.log("DEBUG: Active session recovered", sessionResult.session.user.id);
+          
+          // Refresh wallet data
+          await fetchWalletData();
+          
+          // Show success toast if coming from payment
+          if (status === 'success') {
+            toast({
+              title: "Payment Successful",
+              description: "Your wallet has been funded successfully.",
+              variant: "default"
+            });
+            
+            // Clean up URL
+            router.replace('/wallet');
+          }
+          return;
         }
+        
+        // If we've already been redirected, don't redirect again
+        if (sessionResult.redirected) {
+          console.log("DEBUG: Session recovery already in progress via redirect");
+          return;
+        }
+        
+        // If we still don't have a session after our recovery attempt,
+        // and we have payment parameters, try server-side recovery
+        if (status === 'success' || sessionRecovery === 'true') {
+          console.log("DEBUG: Trying server-side recovery for payment completion");
+          window.location.href = '/api/auth/session-recovery?redirect=/wallet';
+          return;
+        }
+        
+        console.log("DEBUG: Could not recover session");
       } catch (error) {
-        console.error("Error in wallet data fetch:", error)
-        toast({
-          title: "Error",
-          description: "Failed to load wallet data. Please try again.",
-          variant: "destructive",
-        })
-      } finally {
-        setIsLoading(false)
+        console.error("Session recovery error:", error);
       }
+    };
+
+    // Try session recovery when page loads or when returning from payment
+    if (status === 'success' || !isSessionRecoveryAttempted) {
+      attemptSessionRecovery();
     }
+  }, [searchParams, isSessionRecoveryAttempted, status, toast, router]);
 
-    fetchWalletData()
-  }, [supabase, toast])
+  // Function to fetch wallet data
+  const fetchWalletData = async () => {
+    try {
+      setIsLoading(true);
+      const supabase = createClient();
+      
+      // Check if user is authenticated with our enhanced function
+      const sessionResult = await checkSession();
+      
+      if (!sessionResult.session) {
+        console.error("No authenticated session found");
+        setIsLoading(false);
+        return;
+      }
+      
+      // Save user email for payment integration
+      setUserEmail(sessionResult.session.user.email || "");
+      
+      console.log("DEBUG: Fetching wallet data for user", sessionResult.session.user.id);
+      
+      // Fetch wallet balance
+      const { data: walletData, error: walletError } = await supabase
+        .from('wallets')
+        .select('balance')
+        .eq('user_id', sessionResult.session.user.id)
+        .single();
 
-  const refreshData = () => {
-    setIsLoading(true)
-    // Re-fetch data
-    setTimeout(() => {
-      window.location.reload()
-    }, 500)
-  }
+      if (walletError) {
+        console.error("Error fetching wallet:", walletError);
+        setIsLoading(false);
+        return;
+      }
 
-  // Format transaction date
-  const formatTransactionDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString("en-NG", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    })
-  }
+      // Fetch transactions
+      const { data: transactionsData, error: transactionsError } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', sessionResult.session.user.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
 
-  // Get transaction icon based on type
-  const getTransactionIcon = (type: string) => {
-    switch (type) {
-      case "wallet_funding":
-        return <Plus className="w-4 h-4 text-green-500" />
-      case "payment":
-        return <ArrowDownUp className="w-4 h-4 text-red-500" />
-      case "transfer":
-        return <ArrowRight className="w-4 h-4 text-blue-500" />
-      default:
-        return <Clock className="w-4 h-4 text-gray-500" />
+      if (transactionsError) {
+        console.error("Error fetching transactions:", transactionsError);
+      }
+
+      // Update state with fetched data
+      setBalance(walletData?.balance || 0);
+      setTransactions(transactionsData || []);
+      
+      console.log("Wallet data retrieved:", walletData);
+      console.log("Wallet data fetched successfully", { 
+        balance: walletData?.balance,
+        transactionsCount: transactionsData?.length || 0
+      });
+    } catch (error) {
+      console.error("Error in fetchWalletData:", error);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }
+  };
 
-  // Get transaction badge color based on type
-  const getTransactionBadgeClass = (type: string) => {
-    switch (type) {
-      case "wallet_funding":
-        return "bg-green-100 text-green-800"
-      case "payment":
-        return "bg-red-100 text-red-800"
-      case "transfer":
-        return "bg-blue-100 text-blue-800"
-      default:
-        return "bg-gray-100 text-gray-800"
+  // Always fetch wallet data on component mount and when refreshed
+  useEffect(() => {
+    // Check if we have session and are not currently refreshing
+    if (!isRefreshing) {
+      fetchWalletData();
     }
-  }
+    
+    // Clean URL if it contains payment params
+    if (status || message || sessionToken) {
+      // Use Next.js router to replace the current URL without query params
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, '', cleanUrl);
+    }
+  }, [isRefreshing, status, message, sessionToken]);
+
+  // Function to refresh wallet data
+  const refreshWalletData = () => {
+    setIsRefreshing(true);
+    fetchWalletData();
+  };
+
+  const handleFundWallet = () => {
+    setIsFundModalOpen(true);
+  };
+
+  const onFundSuccess = () => {
+    refreshWalletData();
+  };
 
   return (
     <div className="p-4 pb-20">
@@ -162,7 +223,7 @@ export default function WalletPage() {
             variant="ghost" 
             size="icon" 
             className="ml-auto" 
-            onClick={refreshData}
+            onClick={refreshWalletData}
           >
             <RefreshCw className="w-5 h-5 text-gray-600" />
           </Button>
@@ -172,12 +233,12 @@ export default function WalletPage() {
       <div className="bg-blue-600 text-white rounded-xl p-6 mb-6">
         <p className="text-sm mb-1 text-white">Available Balance</p>
         <h2 className="text-3xl font-bold mb-4 text-white">
-          {isLoading ? "Loading..." : formatCurrency(walletData?.balance || 0, walletData?.currency || "NGN")}
+          {isLoading ? "Loading..." : formatCurrency(balance, "NGN")}
         </h2>
         <div className="flex gap-3">
           <Button 
             className="bg-white text-blue-600 hover:bg-white/90 flex-1 border-0"
-            onClick={() => setIsFundModalOpen(true)}
+            onClick={handleFundWallet}
           >
             <Plus className="w-4 h-4 mr-2 text-blue-600" />
             Fund
@@ -226,23 +287,35 @@ export default function WalletPage() {
                   <div className="flex justify-between items-start">
                     <div className="flex items-center">
                       <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center mr-3">
-                        {getTransactionIcon(tx.transaction_type)}
+                        {tx.type === "credit" || tx.transaction_type === "wallet_funding" ? (
+                          <Plus className="w-4 h-4 text-green-500" />
+                        ) : tx.type === "debit" || tx.transaction_type === "payment" ? (
+                          <ArrowDownUp className="w-4 h-4 text-red-500" />
+                        ) : tx.transaction_type === "transfer" ? (
+                          <ArrowRight className="w-4 h-4 text-blue-500" />
+                        ) : (
+                          <Clock className="w-4 h-4 text-gray-500" />
+                        )}
                       </div>
                       <div>
                         <p className="font-medium text-gray-800 capitalize">
-                          {tx.transaction_type.replace('_', ' ')}
+                          {tx.description || tx.transaction_type || tx.type || "Transaction"}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {formatTransactionDate(tx.created_at)} • {tx.reference ? tx.reference.slice(0, 12) + '...' : 'No reference'}
+                          {new Date(tx.created_at).toLocaleDateString("en-NG", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          })} • {tx.reference ? tx.reference.slice(0, 12) + '...' : 'No reference'}
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className={`font-bold ${tx.transaction_type === "payment" ? "text-red-600" : "text-green-600"}`}>
-                        {tx.transaction_type === "payment" ? "-" : "+"}
+                      <p className={`font-bold ${tx.type === "credit" || tx.transaction_type === "wallet_funding" ? "text-green-600" : tx.type === "debit" || tx.transaction_type === "payment" ? "text-red-600" : tx.transaction_type === "transfer" ? "text-blue-600" : "text-gray-600"}`}>
+                        {tx.type === "credit" || tx.transaction_type === "wallet_funding" ? "+" : "-"}
                         {formatCurrency(tx.amount, "NGN")}
                       </p>
-                      <span className={`text-xs px-2 py-1 rounded-full ${getTransactionBadgeClass(tx.transaction_type)}`}>
+                      <span className={`text-xs px-2 py-1 rounded-full ${tx.status === "completed" || tx.status === "success" || tx.status === "SUCCESS" ? "bg-green-100 text-green-800" : tx.status === "pending" || tx.status === "PENDING" || tx.status === "processing" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-800"}`}>
                         {tx.status}
                       </span>
                     </div>
@@ -263,9 +336,9 @@ export default function WalletPage() {
             <div className="text-center py-8 bg-gray-50 rounded-lg">
               <p className="text-gray-500">Loading pending transactions...</p>
             </div>
-          ) : pendingTransactions.length > 0 ? (
+          ) : transactions.length > 0 ? (
             <div className="space-y-3">
-              {pendingTransactions.map((tx) => (
+              {transactions.filter(tx => tx.status === "pending" || tx.status === "PENDING" || tx.status === "processing").map((tx) => (
                 <div key={tx.id} className="bg-white rounded-lg border border-gray-200 p-4">
                   <div className="flex justify-between items-start">
                     <div className="flex items-center">
@@ -274,16 +347,20 @@ export default function WalletPage() {
                       </div>
                       <div>
                         <p className="font-medium text-gray-800 capitalize">
-                          {tx.transaction_type.replace('_', ' ')}
+                          {tx.description || tx.transaction_type || tx.type || "Transaction"}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {formatTransactionDate(tx.created_at)} • {tx.reference ? tx.reference.slice(0, 12) + '...' : 'No reference'}
+                          {new Date(tx.created_at).toLocaleDateString("en-NG", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          })} • {tx.reference ? tx.reference.slice(0, 12) + '...' : 'No reference'}
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className="font-bold text-yellow-600">
-                        {tx.transaction_type === "payment" ? "-" : "+"}
+                        {tx.type === "credit" || tx.transaction_type === "wallet_funding" ? "+" : "-"}
                         {formatCurrency(tx.amount, "NGN")}
                       </p>
                       <span className="text-xs px-2 py-1 rounded-full bg-yellow-100 text-yellow-800">
@@ -320,8 +397,8 @@ export default function WalletPage() {
       <FundWalletModal
         open={isFundModalOpen}
         onOpenChange={setIsFundModalOpen}
+        onSuccess={onFundSuccess}
         userEmail={userEmail}
-        onSuccess={refreshData}
       />
     </div>
   )
