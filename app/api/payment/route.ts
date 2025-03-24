@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
+import { createClient } from '@/lib/supabase/server';
 import { initializeTransaction, verifyTransaction, generateTransactionReference } from '@/lib/paystack';
 
 /**
@@ -27,50 +27,25 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Try to get the Authorization token from the header
-    const authHeader = request.headers.get('authorization');
-    let user = null;
+    // Create response object early to handle cookies
+    const response = NextResponse.next();
     
-    // Create standard Supabase client for server - now async
+    // Create Supabase client with response for cookie handling
     const supabase = await createClient();
     
-    // Try cookie-based auth first
-    console.log('Trying cookie-based authentication...');
+    // Try to get the session
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('Cookie auth result:', { hasSession: !!session });
-      
-      if (session) {
-        user = session.user;
-        console.log('User authenticated via cookie:', { id: user.id, email: user.email });
-      }
-    } catch (cookieError) {
-      console.error('Cookie auth error:', cookieError);
+    if (sessionError) {
+      console.error('Session error:', sessionError);
+      return NextResponse.json(
+        { error: 'Authentication error' },
+        { status: 401 }
+      );
     }
     
-    // If cookie auth failed, try token-based auth
-    if (!user && authHeader && authHeader.startsWith('Bearer ')) {
-      console.log('Trying token-based authentication...');
-      const token = authHeader.replace('Bearer ', '');
-      
-      try {
-        const { data, error } = await supabase.auth.getUser(token);
-        
-        if (error) {
-          console.error('Token authentication error:', error);
-        } else if (data.user) {
-          user = data.user;
-          console.log('User authenticated via token:', { id: user.id, email: user.email });
-        }
-      } catch (tokenError) {
-        console.error('Token processing error:', tokenError);
-      }
-    }
-    
-    // If no user is authenticated, return 401
-    if (!user) {
-      console.log('No authenticated user found');
+    if (!session) {
+      console.log('No session found');
       return NextResponse.json(
         { error: 'You must be logged in to make a payment' },
         { status: 401 }
@@ -78,8 +53,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Get user details
-    const userEmail = user.email || '';
-    const userId = user.id;
+    const userEmail = session.user.email || '';
+    const userId = session.user.id;
     
     console.log('User authenticated:', { userId, userEmail });
     
@@ -91,96 +66,145 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate a unique reference for this transaction
-    const reference = generateTransactionReference();
-    
-    // Create metadata for the transaction
-    const metadata = {
-      user_id: userId,
-      transaction_type: 'wallet_funding',
-    };
-
-    // Initialize a transaction with Paystack
-    console.log('Initializing Paystack transaction...');
-    const paystackResponse = await initializeTransaction({
-      amount,
-      email: userEmail,
-      reference,
-      metadata: {
-        ...metadata,
-        custom_fields: [
-          {
-            display_name: "Email Address",
-            variable_name: "email",
-            value: userEmail
-          },
-          {
-            display_name: "User ID",
-            variable_name: "user_id",
-            value: userId
-          }
-        ]
-      },
-      // Update to use our new API verification endpoint instead of frontend page
-      callback_url: `${request.nextUrl.origin}/api/payment/verify?reference=${reference}`,
+    // Initialize Paystack transaction
+    console.log("Initializing Paystack transaction...");
+    console.log("DEBUG: Amount conversion for Paystack:", {
+      originalAmount: amount,
+      amountInKobo: amount * 100,
+      conversionRate: 100
     });
 
-    console.log('Paystack response:', paystackResponse.data);
-
-    // Check if transactions table structure exists before inserting
-    try {
-      console.log('Storing transaction in database...');
-      
-      // First, check if we can get the table structure
-      const { error: tableCheckError } = await supabase
-        .from('transactions')
-        .select('id')
-        .limit(1);
-      
-      if (tableCheckError) {
-        console.error('Error checking transactions table:', tableCheckError);
-        // Don't try to insert if table structure is invalid
-      } else {
-        // Attempt to insert with proper error handling
-        try {
-          const { error } = await supabase
-            .from('transactions')
-            .insert({
-              user_id: userId,
-              reference,
-              amount,
-              status: 'pending',
-              transaction_type: 'wallet_funding',
-              metadata: {
-                email: userEmail,
-                user_id: userId,
-                authorization_url: paystackResponse.data.authorization_url,
-                access_code: paystackResponse.data.access_code,
-              },
-            });
-
-          if (error) {
-            console.error('Database error when inserting transaction:', error);
-            // Log detailed error but continue payment flow
-          } else {
-            console.log('Transaction successfully recorded in database');
-          }
-        } catch (insertError) {
-          console.error('Failed to insert transaction record:', insertError);
+    const paystackResponse = await fetch("https://api.paystack.co/transaction/initialize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: userEmail,
+        amount: amount * 100, // Convert to kobo for Paystack
+        reference: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+        metadata: {
+          userId,
+          originalAmount: amount, // Store original amount in naira
+          conversionRate: 100,
+          timestamp: new Date().toISOString()
         }
-      }
-    } catch (dbError) {
-      console.error('Database error:', dbError);
-      // Continue with the payment flow even if DB insertion fails
+      }),
+    });
+
+    const paystackData = await paystackResponse.json();
+    console.log("Paystack response:", paystackData);
+
+    if (!paystackData.status) {
+      throw new Error(paystackData.message || "Failed to initialize payment");
     }
 
-    return NextResponse.json({ data: paystackResponse.data });
+    // Store transaction in database
+    console.log("Storing transaction in database...");
+    const { error: insertError } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: userId,
+        amount: amount, // Store amount in naira
+        reference: paystackData.data.reference,
+        status: "pending",
+        payment_provider: "paystack",
+        metadata: {
+          paystackReference: paystackData.data.reference,
+          originalAmount: amount,
+          amountInKobo: amount * 100,
+          conversionRate: 100,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+    if (insertError) {
+      console.error("Database error when inserting transaction:", insertError);
+      throw new Error("Failed to store transaction");
+    }
+
+    // Set success response with preserved session
+    const successResponse = NextResponse.json({
+      status: "success",
+      data: {
+        reference: paystackData.data.reference,
+        authorization_url: paystackData.data.authorization_url,
+      },
+    });
+
+    // Preserve auth cookies
+    const authCookies = request.cookies.getAll()
+      .filter(cookie => cookie.name.startsWith('sb-'));
+    
+    authCookies.forEach(cookie => {
+      successResponse.cookies.set({
+        name: cookie.name,
+        value: cookie.value,
+        httpOnly: true,
+        path: '/',
+        maxAge: 60 * 60 * 24 * 7, // 1 week
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production'
+      });
+    });
+
+    // Set recovery cookies
+    successResponse.cookies.set({
+      name: 'auth_recovery',
+      value: 'true',
+      path: '/',
+      maxAge: 60 * 60, // 1 hour
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    successResponse.cookies.set({
+      name: 'recovery_user_id',
+      value: userId,
+      path: '/',
+      maxAge: 60 * 60, // 1 hour
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    successResponse.cookies.set({
+      name: 'session_timestamp',
+      value: Date.now().toString(),
+      path: '/',
+      maxAge: 60 * 60, // 1 hour
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    return successResponse;
+
   } catch (error) {
-    console.error('Payment initiation error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to process payment' },
+    console.error("Payment initialization error:", error);
+    
+    // Create error response with preserved session
+    const errorResponse = NextResponse.json(
+      { error: "Failed to initialize payment" },
       { status: 500 }
     );
+
+    // Preserve auth cookies even on error
+    const authCookies = request.cookies.getAll()
+      .filter(cookie => cookie.name.startsWith('sb-'));
+    
+    authCookies.forEach(cookie => {
+      errorResponse.cookies.set({
+        name: cookie.name,
+        value: cookie.value,
+        httpOnly: true,
+        path: '/',
+        maxAge: 60 * 60 * 24 * 7, // 1 week
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production'
+      });
+    });
+
+    return errorResponse;
   }
 }
 

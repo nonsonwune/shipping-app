@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
 import { getPaystackPublicKey } from "@/lib/paystack"
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createClient } from '@/lib/supabase/client'
 
 // Dynamically import PaystackButton with SSR disabled
 const PaystackButton = dynamic(
@@ -45,7 +45,7 @@ export function FundWalletModal({
   const [sessionError, setSessionError] = useState<string | null>(null)
   const router = useRouter()
   const { toast } = useToast()
-  const supabase = createClientComponentClient()
+  const supabase = createClient()
 
   // Predefined amounts
   const predefinedAmounts = [1000, 5000, 10000, 20000]
@@ -105,14 +105,15 @@ export function FundWalletModal({
     setIsLoading(true)
 
     try {
-      console.log("Making payment request with auth details:", {
-        hasSessionToken: !!sessionToken,
-        tokenLength: sessionToken?.length || 0,
+      const amountInNaira = parseFloat(amount);
+      console.log("DEBUG: Payment initialization details:", {
+        amountInNaira,
         email: userEmail,
-        amount: parseFloat(amount)
-      })
+        hasSessionToken: !!sessionToken,
+        tokenLength: sessionToken?.length || 0
+      });
 
-      // Prepare headers
+      // Prepare headers with improved session handling
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       }
@@ -121,13 +122,13 @@ export function FundWalletModal({
         headers["Authorization"] = `Bearer ${sessionToken}`
       }
 
-      // Make the API request
+      // Make the API request with improved error handling
       const response = await fetch("/api/payment", {
         method: "POST",
         headers,
         credentials: "include", // Important: Include cookies for session auth
         body: JSON.stringify({
-          amount: parseFloat(amount),
+          amount: amountInNaira, // Send amount in naira
           email: userEmail,
         }),
       })
@@ -144,22 +145,39 @@ export function FundWalletModal({
         })
         
         if (response.status === 401) {
-          throw new Error("Authentication failed. Please log out and log in again.")
+          // Try to recover session
+          const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+          
+          if (sessionError || !session) {
+            throw new Error("Authentication failed. Please log out and log in again.")
+          }
+          
+          // Retry with new session token
+          headers["Authorization"] = `Bearer ${session.access_token}`
+          const retryResponse = await fetch("/api/payment", {
+            method: "POST",
+            headers,
+            credentials: "include",
+            body: JSON.stringify({
+              amount: amountInNaira,
+              email: userEmail,
+            }),
+          })
+          
+          if (!retryResponse.ok) {
+            throw new Error("Authentication failed after retry. Please log out and log in again.")
+          }
+          
+          const result = await retryResponse.json()
+          handlePaymentSuccess(result)
+          return
         } else {
           throw new Error(errorData?.error || `Server error: ${response.status}`)
         }
       }
 
       const result = await response.json()
-      console.log("Payment initialized successfully:", result.data.reference)
-
-      // If using Paystack inline
-      if (directPayment) {
-        setReference(result.data.reference)
-      } else {
-        // Redirect to Paystack checkout page
-        window.location.href = result.data.authorization_url
-      }
+      handlePaymentSuccess(result)
     } catch (error: any) {
       console.error("Payment initiation error:", error)
       toast({
@@ -172,14 +190,33 @@ export function FundWalletModal({
     }
   }
 
+  const handlePaymentSuccess = (result: any) => {
+    console.log("Payment initialized successfully:", {
+      reference: result.data.reference,
+      amount: amount
+    })
+
+    // If using Paystack inline
+    if (directPayment) {
+      setReference(result.data.reference)
+    } else {
+      // Redirect to Paystack checkout page
+      window.location.href = result.data.authorization_url
+    }
+  }
+
   // Paystack inline config
   const paystackConfig = {
     reference: reference || "",
     email: userEmail,
-    amount: parseFloat(amount) * 100, // Convert to kobo
+    amount: parseFloat(amount), // Keep amount in naira, conversion will be handled by the API
     publicKey: getPaystackPublicKey(),
     text: "Pay Now",
     onSuccess: () => {
+      console.log("DEBUG: Paystack payment success:", {
+        amountInNaira: parseFloat(amount),
+        reference: reference
+      });
       toast({
         title: "Payment Successful",
         description: "Your wallet has been funded successfully",
@@ -189,6 +226,7 @@ export function FundWalletModal({
       router.refresh()
     },
     onClose: () => {
+      console.log("DEBUG: Paystack payment cancelled");
       toast({
         title: "Payment Cancelled",
         description: "Your payment was cancelled",

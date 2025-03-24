@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -20,7 +20,7 @@ import {
   TabsList, 
   TabsTrigger 
 } from "@/components/ui/tabs"
-import { createBrowserClient as createClient, checkSession } from "@/utils/supabase/client"
+import { createClient, getSession, recoverSession } from "@/lib/supabase/client"
 import { FundWalletModal } from "@/components/fund-wallet-modal"
 import { formatCurrency } from "@/lib/paystack"
 import { useToast } from "@/components/ui/use-toast"
@@ -42,7 +42,8 @@ interface Wallet {
   currency: string
 }
 
-export default function WalletPage() {
+// Wrapper component to handle search params with Suspense
+function WalletContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [balance, setBalance] = useState(0);
@@ -70,11 +71,11 @@ export default function WalletPage() {
       setIsSessionRecoveryAttempted(true);
       
       try {
-        // Use our enhanced session check function
-        const sessionResult = await checkSession();
+        // Use the standardized session check function
+        const { session, error } = await getSession();
         
-        if (sessionResult.session) {
-          console.log("DEBUG: Active session recovered", sessionResult.session.user.id);
+        if (session) {
+          console.log("DEBUG: Active session recovered", session.user.id);
           
           // Refresh wallet data
           await fetchWalletData();
@@ -93,16 +94,20 @@ export default function WalletPage() {
           return;
         }
         
-        // If we've already been redirected, don't redirect again
-        if (sessionResult.redirected) {
-          console.log("DEBUG: Session recovery already in progress via redirect");
-          return;
-        }
-        
-        // If we still don't have a session after our recovery attempt,
-        // and we have payment parameters, try server-side recovery
+        // If we still don't have a session, try to recover
         if (status === 'success' || sessionRecovery === 'true') {
-          console.log("DEBUG: Trying server-side recovery for payment completion");
+          console.log("DEBUG: Trying session recovery for payment completion");
+          
+          // Try to recover session using the standardized function
+          const recoveredSession = await recoverSession();
+          
+          if (recoveredSession) {
+            console.log("DEBUG: Session recovered after manual attempt");
+            await fetchWalletData();
+            return;
+          }
+          
+          // If recovery failed, redirect to server-side recovery
           window.location.href = '/api/auth/session-recovery?redirect=/wallet';
           return;
         }
@@ -123,27 +128,29 @@ export default function WalletPage() {
   const fetchWalletData = async () => {
     try {
       setIsLoading(true);
-      const supabase = createClient();
       
-      // Check if user is authenticated with our enhanced function
-      const sessionResult = await checkSession();
+      // Use the standardized session check
+      const { session, error } = await getSession();
       
-      if (!sessionResult.session) {
+      if (error || !session) {
         console.error("No authenticated session found");
         setIsLoading(false);
         return;
       }
       
-      // Save user email for payment integration
-      setUserEmail(sessionResult.session.user.email || "");
+      // Use the standardized client
+      const supabase = createClient();
       
-      console.log("DEBUG: Fetching wallet data for user", sessionResult.session.user.id);
+      // Save user email for payment integration
+      setUserEmail(session.user.email || "");
+      
+      console.log("DEBUG: Fetching wallet data for user", session.user.id);
       
       // Fetch wallet balance
       const { data: walletData, error: walletError } = await supabase
         .from('wallets')
         .select('balance')
-        .eq('user_id', sessionResult.session.user.id)
+        .eq('user_id', session.user.id)
         .single();
 
       if (walletError) {
@@ -156,7 +163,7 @@ export default function WalletPage() {
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('transactions')
         .select('*')
-        .eq('user_id', sessionResult.session.user.id)
+        .eq('user_id', session.user.id)
         .order('created_at', { ascending: false })
         .limit(10);
 
@@ -402,4 +409,13 @@ export default function WalletPage() {
       />
     </div>
   )
+}
+
+// Main export using Suspense boundary
+export default function WalletPage() {
+  return (
+    <Suspense fallback={<div className="p-4">Loading wallet...</div>}>
+      <WalletContent />
+    </Suspense>
+  );
 }

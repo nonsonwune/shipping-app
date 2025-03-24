@@ -12,7 +12,7 @@ import {
   Truck,
   X
 } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { safeFormatRelative } from "@/utils/date-helpers"
 import { Button } from "@/components/ui/button"
 import {
@@ -34,7 +34,23 @@ type Notification = {
   created_at: string
 }
 
+// Wrap the component with error handling
 export default function NotificationDropdown() {
+  try {
+    return <SafeNotificationDropdown />;
+  } catch (error) {
+    console.error("Error rendering NotificationDropdown:", error);
+    // Return a simplified fallback UI
+    return (
+      <Button variant="ghost" size="icon">
+        <Bell className="h-5 w-5" />
+      </Button>
+    );
+  }
+}
+
+// Main component implementation moved to this function
+function SafeNotificationDropdown() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -45,7 +61,7 @@ export default function NotificationDropdown() {
     fetchNotifications()
     
     // Set up real-time subscription for new notifications
-    const channel = supabase
+    const channel = createClient()
       .channel('notification_changes')
       .on(
         'postgres_changes',
@@ -53,7 +69,7 @@ export default function NotificationDropdown() {
           event: 'INSERT',
           schema: 'public',
           table: 'notifications',
-          filter: `user_id=eq.${supabase.auth.getSession().then(({ data }) => data.session?.user.id)}`
+          filter: `user_id=eq.${createClient().auth.getSession().then(({ data }) => data.session?.user.id)}`
         },
         (payload) => {
           // Add new notification to the list
@@ -73,7 +89,7 @@ export default function NotificationDropdown() {
     
     // Clean up subscription on unmount
     return () => {
-      supabase.removeChannel(channel)
+      createClient().removeChannel(channel)
     }
   }, [])
   
@@ -82,13 +98,13 @@ export default function NotificationDropdown() {
     try {
       setLoading(true)
       
-      const { data: { session } } = await supabase.auth.getSession()
+      const { data: { session } } = await createClient().auth.getSession()
       
       if (!session) {
         return
       }
       
-      const { data, error } = await supabase
+      const { data, error } = await createClient()
         .from('notifications')
         .select('*')
         .limit(20)
@@ -111,7 +127,7 @@ export default function NotificationDropdown() {
   const markAsRead = async (id: string) => {
     try {
       // Update in database
-      const { error } = await supabase
+      const { error } = await createClient()
         .from('notifications')
         .update({ is_read: true })
         .eq('id', id)
@@ -144,7 +160,7 @@ export default function NotificationDropdown() {
       if (unreadIds.length === 0) return
       
       // Update in database
-      const { error } = await supabase
+      const { error } = await createClient()
         .from('notifications')
         .update({ is_read: true })
         .in('id', unreadIds)

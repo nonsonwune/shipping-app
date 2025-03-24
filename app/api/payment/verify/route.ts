@@ -4,344 +4,244 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-// Import the admin client directly to avoid server/client module confusion
 import { createClient as createAdminClient } from "@/lib/supabase/admin";
-// Import the server client directly (only used in server context)
 import { createClient as createServerClient } from "@/lib/supabase/server";
-import { Database } from "@/types/supabase";
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
+import { cookies } from "next/headers";
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+
+// Helper function to get user by email
+async function getUserByEmail(email: string) {
+  const supabase = createRouteHandlerClient({ cookies });
+  const { data: userData, error } = await supabase
+    .from("users")
+    .select("id")
+    .eq("email", email)
+    .single();
+
+  if (error) {
+    console.error("Error looking up user by email:", error);
+    return null;
+  }
+
+  return userData?.id;
+}
 
 /**
  * Verify a transaction and update user's wallet
  */
 export async function GET(request: NextRequest) {
-  console.log("Payment verification initiated");
-  const searchParams = request.nextUrl.searchParams;
+  const supabase = createRouteHandlerClient({ cookies });
   
-  // Get the transaction reference from the URL
+  // Get the reference from the URL
+  const { searchParams } = new URL(request.url);
   const reference = searchParams.get("reference");
+
   if (!reference) {
     return NextResponse.redirect(
-      new URL("/wallet?status=failed&message=Invalid transaction reference", request.url),
+      new URL("/wallet?status=failed&message=No reference provided", request.url),
       { status: 303 }
     );
   }
-  
+
+  console.log("Payment verification initiated");
   console.log("Verifying transaction with reference:", reference);
   
   try {
-    // Use Paystack API to verify transaction
-    const paystackRes = await fetch(
+    // Verify transaction with Paystack
+    const paystackResponse = await fetch(
       `https://api.paystack.co/transaction/verify/${reference}`,
       {
         headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
         },
       }
     );
-    
-    const paystackData = await paystackRes.json();
-    
-    if (!paystackData.status || paystackData.data.status !== "success") {
-      return NextResponse.redirect(
-        new URL(`/wallet?status=failed&message=${encodeURIComponent('Payment verification failed')}`, request.url),
-        { status: 303 }
-      );
+
+    const paystackData = await paystackResponse.json();
+    console.log("Paystack verification response:", paystackData);
+
+    if (!paystackData.status) {
+      throw new Error(paystackData.message || "Transaction verification failed");
     }
 
-    // Transaction verified successfully
     const transaction = paystackData.data;
-    console.log("Transaction verified successfully:", {
+    console.log("Transaction details:", {
+      reference: transaction.reference,
       status: transaction.status,
       amount: transaction.amount,
-      reference: transaction.reference,
+      metadata: transaction.metadata
     });
-    
-    // Get user ID from transaction metadata or cookies
-    let userId = null;
-    
-    // Create server client for auth and database operations
-    console.log("Creating admin client");
-    const adminClient = createAdminClient();
-    
-    console.log("[Supabase Debug] Creating Supabase admin client with service role");
-    
-    try {
-      // First, check if transaction already exists to avoid duplication
-      const cookieStr = request.headers.get("cookie");
-      console.log("Request cookies:", { cookieHeader: cookieStr });
 
-      // Attempt to find existing transaction
-      try {
-        const { data: existingTx, error: findError } = await adminClient
-          .from("transactions")
-          .select("*")
-          .eq("reference", reference)
-          .single();
+    // Get user ID from transaction metadata or customer email
+    const userId = transaction.metadata?.userId || 
+                  (await getUserByEmail(transaction.customer.email));
 
-        if (findError) {
-          console.log("Detailed RLS error:", {
-            code: findError.code,
-            message: findError.message,
-            details: findError.details,
-            hint: findError.hint
-          });
-          
-          console.error("Error finding transaction in database:", findError);
-        }
-        
-        if (existingTx) {
-          // Transaction already processed, just redirect
-          console.log("Transaction already processed");
-          
-          // Ensure we have userId for redirect
-          userId = existingTx.user_id;
-          
-          return NextResponse.redirect(
-            new URL(`/wallet?status=success&message=Payment successful&session=${existingTx.user_id}`, request.url),
-            { status: 303 }
-          );
-        }
-      } catch (findErr) {
-        console.error("Exception when checking for existing transaction:", findErr);
-      }
+    if (!userId) {
+      throw new Error("User not found");
+    }
 
-      console.log("Transaction not found, creating new transaction record");
-      
-      // Check if transaction metadata contains customer info
-      if (transaction.metadata && transaction.metadata.custom_fields) {
-        const userField = transaction.metadata.custom_fields.find(
-          (field: any) => field.variable_name === "user_id"
-        );
-        
-        if (userField) {
-          userId = userField.value;
-          console.log("Found user ID in transaction metadata:", userId);
-        }
-      } else if (transaction.customer && transaction.customer.email) {
-        // Find user by email if no direct ID
-        const { data: userData, error: userError } = await adminClient
-          .from("users")
-          .select("id")
-          .eq("email", transaction.customer.email)
-          .single();
-          
-        if (!userError && userData) {
-          userId = userData.id;
-          console.log("Found user ID by email lookup:", userId);
-        } else {
-          console.error("User lookup error:", userError);
-        }
-      }
-      
-      if (!userId) {
-        return NextResponse.redirect(
-          new URL(`/wallet?status=failed&message=${encodeURIComponent('User identification failed')}`, request.url),
-          { status: 303 }
-        );
-      }
+    // Convert amount from kobo to naira
+    const amountInNaira = parseFloat(transaction.amount) / 100;
+    console.log("DEBUG: Amount conversion:", {
+      originalAmount: transaction.amount,
+      amountInNaira,
+      conversionRate: 100
+    });
 
-      // Create transaction record
-      console.log("Creating transaction record for user:", userId);
-      
-      // Debug the valid status values
-      console.log("DEBUG: Adding debug query to check valid status values");
-      try {
-        const { data: statusValues } = await adminClient.rpc('get_enum_values', { enum_name: 'transaction_status' });
-        console.log("Valid transaction status values:", statusValues);
-      } catch (enumErr) {
-        console.error("Error getting enum values:", enumErr);
-      }
-      
-      // Prepare transaction data that matches our schema
-      // Convert status to match allowed values from the database constraint
-      // The database only accepts: 'pending', 'completed', 'failed', 'refunded'
-      const statusMap: Record<string, string> = {
-        'success': 'completed',
-        'failed': 'failed',
-        'abandoned': 'failed',
-        'cancelled': 'failed',
-        'pending': 'pending',
-        'reversed': 'refunded'
-      };
-      
-      const normalizedStatus = statusMap[transaction.status.toLowerCase()] || 'pending';
-      
-      console.log("DEBUG: Using normalized status value:", normalizedStatus);
-      
-      // Convert amount from kobo to naira for transaction record
-      // Paystack uses kobo (100 kobo = 1 naira)
-      const amountInNaira = parseFloat(transaction.amount) / 100;
-      console.log(`Converting amount for transaction record: ${transaction.amount} kobo → ${amountInNaira} naira`);
-      
-      const transactionData = {
-        reference: reference,
-        amount: amountInNaira, // Amount already converted to naira
-        user_id: userId,
-        transaction_type: 'wallet_funding',
-        status: normalizedStatus, // Use normalized status that matches DB constraints
-        type: 'credit',
-        description: 'Wallet funding via Paystack'
-      };
-      
-      console.log("Transaction insertion attempt:", {
-        userId,
-        amount: transaction.amount,
-        reference,
-        status: normalizedStatus,
-        clientType: "admin"
-      });
-      
-      console.log("Transaction insertion attempt:", {
-        userId,
-        amount: transaction.amount,
-        reference,
-        status: transaction.status,
-        clientType: "admin"
-      });
-      
-      try {
-        // Use admin client to bypass RLS
-        const { data: insertedTx, error: insertErr } = await adminClient
-          .from("transactions")
-          .insert(transactionData)
-          .select("id")
-          .single();
-        
-        if (insertErr) {
-          console.log("Detailed RLS error on transaction insert:", {
-            code: insertErr.code,
-            message: insertErr.message,
-            details: insertErr.details,
-            hint: insertErr.hint,
-          });
-          
-          console.error("Error creating transaction:", insertErr);
-          return NextResponse.redirect(
-            new URL(`/wallet?status=failed&message=${encodeURIComponent('Failed to record transaction')}`, request.url),
-            { status: 303 }
-          );
-        }
-        
-        // If transaction was successful, update the wallet balance
-        if (normalizedStatus === 'completed') {
-          console.log("Transaction successful, updating wallet balance");
-          
-          // Get current wallet
-          const { data: walletData, error: walletError } = await adminClient
-            .from('wallets')
-            .select('id, balance')
-            .eq('user_id', userId)
-            .single();
-            
-          if (walletError) {
-            console.error("Error fetching wallet:", walletError);
-            throw new Error(`Error fetching wallet: ${walletError.message}`);
-          }
-          
-          if (!walletData) {
-            console.error("No wallet found for user");
-            throw new Error("No wallet found for user");
-          }
-          
-          // Update wallet with new balance
-          // Fixed: The transaction.amount is already in kobo (100 kobo = 1 naira)
-          // The server was double-dividing by 100, causing the 10x multiplication issue
-          const amountInNaira = parseFloat(transaction.amount) / 100;
-          console.log(`Converting amount from kobo to naira: ${transaction.amount} kobo → ${amountInNaira} naira`);
-          
-          const newBalance = (walletData.balance || 0) + amountInNaira;
-          
-          // Update wallet balance
-          const { error: updateError } = await adminClient
-            .from('wallets')
-            .update({ 
-              balance: newBalance,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', walletData.id);
-            
-          if (updateError) {
-            console.error("Error updating wallet balance:", updateError);
-            throw new Error(`Error updating wallet balance: ${updateError.message}`);
-          }
-          
-          console.log("Wallet balance updated successfully to:", newBalance);
-          
-          // Update the transaction with wallet_id
-          const { error: linkError } = await adminClient
-            .from('transactions')
-            .update({ wallet_id: walletData.id })
-            .eq('id', insertedTx.id);
-            
-          if (linkError) {
-            console.error("Error linking transaction to wallet:", linkError);
-          }
-        }
-        
-        // Begin transaction for atomicity
-        try {
-          // Generate a secure session token for the redirect
-          const sessionToken = Buffer.from(`${userId}:${Date.now()}`).toString('base64');
-          
-          // Use stronger, more persistent cookies and add an access token for recovery
-          const cookieMaxAge = 60 * 60; // 1 hour in seconds
-          
-          // Redirect with session token to help maintain auth state
-          const redirectUrl = new URL(`/wallet?status=success&message=${encodeURIComponent('Payment successful')}`, request.url);
-          
-          // Debug logs for session persistence
-          console.log("DEBUG: Creating redirect with session token:", {
-            sessionToken: sessionToken.substring(0, 10) + '...',
-            redirectUrl: redirectUrl.toString()
-          });
-          
-          // Create response with proper redirect
-          const response = NextResponse.redirect(redirectUrl, { status: 303 });
-          
-          // Set cookies individually for proper cookie handling
-          response.cookies.set({
-            name: 'paystack_session',
-            value: sessionToken,
-            httpOnly: true,
-            path: '/',
-            maxAge: cookieMaxAge,
-            sameSite: 'lax'
-          });
-          
-          response.cookies.set({
-            name: 'auth_recovery',
-            value: 'true',
-            path: '/',
-            maxAge: cookieMaxAge
-          });
-          
-          return response;
-          
-        } catch (transactionError) {
-          console.error("Transaction processing error:", transactionError);
-          return NextResponse.redirect(
-            new URL('/wallet?status=partial&message=Transaction partially processed', request.url),
-            { status: 303 }
-          );
-        }
-      } catch (insertError) {
-        console.error("Error inserting transaction:", insertError);
-        return NextResponse.redirect(
-          new URL('/wallet?status=failed&message=Database error', request.url),
-          { status: 303 }
-        );
-      }
-          
-    } catch (error) {
-      console.error("Error processing verified transaction:", error);
+    // Check if transaction already exists
+    const { data: existingTransaction } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("reference", reference)
+      .single();
+
+    if (existingTransaction) {
+      console.log("Transaction already exists:", existingTransaction);
       return NextResponse.redirect(
-        new URL("/wallet?status=failed&message=Processing error", request.url),
+        new URL("/wallet?status=success&message=Transaction already processed", request.url),
         { status: 303 }
       );
     }
+
+    // Insert transaction record
+    const { error: insertError } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: userId,
+        amount: amountInNaira, // Store amount in naira
+        reference: transaction.reference,
+        status: transaction.status,
+        payment_provider: "paystack",
+        metadata: {
+          ...transaction.metadata,
+          originalAmount: transaction.amount,
+          amountInNaira,
+          conversionRate: 100,
+          verificationTimestamp: new Date().toISOString()
+        }
+      });
+
+    if (insertError) {
+      console.error("Error inserting transaction:", insertError);
+      throw new Error("Failed to store transaction");
+    }
+
+    // Update wallet balance if transaction is successful
+    if (transaction.status === "success") {
+      const { data: walletData, error: walletError } = await supabase
+        .from("wallets")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (walletError) {
+        console.error("Error fetching wallet:", walletError);
+        throw new Error("Wallet not found");
+      }
+
+      console.log("DEBUG: Updating wallet balance:", {
+        currentBalance: walletData.balance,
+        amountToAdd: amountInNaira,
+        newBalance: walletData.balance + amountInNaira
+      });
+
+      const { error: updateError } = await supabase
+        .from("wallets")
+        .update({ balance: walletData.balance + amountInNaira })
+        .eq("user_id", userId);
+
+      if (updateError) {
+        console.error("Error updating wallet balance:", updateError);
+        throw new Error("Failed to update wallet balance");
+      }
+
+      // Link transaction to wallet
+      const { error: linkError } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          wallet_id: walletData.id,
+          transaction_id: transaction.reference,
+          amount: amountInNaira,
+          type: "credit",
+          status: "completed"
+        });
+
+      if (linkError) {
+        console.error("Error linking transaction to wallet:", linkError);
+        throw new Error("Failed to link transaction to wallet");
+      }
+    }
+
+    // Generate a secure session token for redirect
+    const sessionToken = Buffer.from(`${userId}:${Date.now()}`).toString('base64');
     
+    // Create redirect URL with success message
+    const redirectUrl = new URL("/wallet", request.url);
+    redirectUrl.searchParams.set("status", "success");
+    redirectUrl.searchParams.set("message", "Payment successful");
+    redirectUrl.searchParams.set("session", sessionToken);
+
+    // Create response with redirect
+    const response = NextResponse.redirect(redirectUrl, { status: 303 });
+
+    // Set cookie max age to 1 hour
+    const cookieMaxAge = 60 * 60; // 1 hour in seconds
+
+    // Preserve existing auth cookie if present
+    const existingAuthCookie = request.cookies.get('sb-rtbqpprntygrgxopxoei-auth-token');
+    if (existingAuthCookie) {
+      response.cookies.set({
+        name: 'sb-rtbqpprntygrgxopxoei-auth-token',
+        value: existingAuthCookie.value,
+        httpOnly: true,
+        path: '/',
+        maxAge: cookieMaxAge,
+        sameSite: 'lax'
+      });
+    }
+
+    // Set recovery cookies with improved security
+    response.cookies.set({
+      name: 'paystack_session',
+      value: sessionToken,
+      httpOnly: true,
+      path: '/',
+      maxAge: cookieMaxAge,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    response.cookies.set({
+      name: 'auth_recovery',
+      value: 'true',
+      path: '/',
+      maxAge: cookieMaxAge,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    response.cookies.set({
+      name: 'recovery_user_id',
+      value: userId,
+      path: '/',
+      maxAge: cookieMaxAge,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    response.cookies.set({
+      name: 'session_timestamp',
+      value: Date.now().toString(),
+      path: '/',
+      maxAge: cookieMaxAge,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production'
+    });
+
+    return response;
+
   } catch (error) {
     console.error("Payment verification error:", error);
     return NextResponse.redirect(
@@ -349,35 +249,4 @@ export async function GET(request: NextRequest) {
       { status: 303 }
     );
   }
-}
-
-/**
- * Update a user's wallet balance 
- */
-async function updateWalletBalance(supabase: any, userId: string, amount: number) {
-  // First, get current wallet balance
-  const { data: wallet, error: walletError } = await supabase
-    .from("wallets")
-    .select("balance")
-    .eq("user_id", userId)
-    .single();
-    
-  if (walletError) {
-    console.error("Error fetching wallet:", walletError);
-    throw new Error("Failed to fetch wallet balance");
-  }
-  
-  const currentBalance = wallet?.balance || 0;
-  const newBalance = currentBalance + amount;
-  
-  // Update wallet balance
-  const { error: updateError } = await supabase
-    .from("wallets")
-    .update({ balance: newBalance })
-    .eq("user_id", userId);
-    
-  if (updateError) {
-    console.error("Error updating wallet balance:", updateError);
-    throw new Error("Failed to update wallet balance");
-  }
-}
+} 

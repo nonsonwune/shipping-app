@@ -4,8 +4,45 @@ import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { createTestUser, supabase } from "@/lib/supabase"
+import { supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+
+// Local implementation of createTestUser since it's not exported from lib/supabase
+async function createTestUser() {
+  if (!supabase) {
+    throw new Error('Supabase client is not available');
+  }
+  
+  // Check if user already exists
+  const { data: existingUser } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('email', 'test@example.com')
+    .single();
+    
+  if (existingUser) {
+    console.log('Test user already exists');
+    return;
+  }
+    
+  // Create user with auth
+  const { data, error } = await supabase.auth.signUp({
+    email: 'test@example.com',
+    password: 'password123',
+    options: {
+      data: {
+        full_name: 'Test User',
+      }
+    }
+  });
+    
+  if (error) {
+    throw error;
+  }
+    
+  console.log('Created test user:', data);
+  return data;
+}
 
 export default function DevTools() {
   const router = useRouter()
@@ -27,6 +64,11 @@ export default function DevTools() {
   }
   
   async function handleSignInTestUser() {
+    if (!supabase) {
+      setMessage("Supabase client is not available");
+      return;
+    }
+    
     setLoading(true)
     setMessage("Signing in test user...")
     try {
@@ -52,6 +94,11 @@ export default function DevTools() {
   }
   
   async function handleSignOut() {
+    if (!supabase) {
+      setMessage("Supabase client is not available");
+      return;
+    }
+    
     setLoading(true)
     setMessage("Signing out...")
     try {

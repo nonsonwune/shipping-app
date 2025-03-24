@@ -90,17 +90,32 @@ export async function middleware(req: NextRequest) {
                          url.searchParams.has('trxref');
   
   if (pathname === '/wallet' && hasPaymentParams) {
-    console.log('Payment verification redirect detected, skipping auth check');
-    return NextResponse.next();
-  }
-  
-  // Check for recovery cookies
-  const authRecoveryCookie = req.cookies.get('auth_recovery');
-  const paystackSessionCookie = req.cookies.get('paystack_session');
-  
-  if (authRecoveryCookie?.value === 'true' || paystackSessionCookie) {
-    console.log('Session recovery cookies detected, skipping auth check');
-    return NextResponse.next();
+    console.log('Payment verification redirect detected, checking session recovery');
+    
+    // Check for recovery cookies
+    const authRecoveryCookie = req.cookies.get('auth_recovery');
+    const paystackSessionCookie = req.cookies.get('paystack_session');
+    const sessionTimestampCookie = req.cookies.get('session_timestamp');
+    
+    // Check if session is still valid (within 1 hour)
+    const isValidSession = sessionTimestampCookie && 
+      (Date.now() - parseInt(sessionTimestampCookie.value)) < 60 * 60 * 1000;
+    
+    if ((authRecoveryCookie?.value === 'true' || paystackSessionCookie) && isValidSession) {
+      console.log('Valid session recovery cookies detected, allowing request');
+      return NextResponse.next();
+    }
+    
+    // If session is expired, clear recovery cookies
+    if (sessionTimestampCookie && !isValidSession) {
+      console.log('Session expired, clearing recovery cookies');
+      const response = NextResponse.next();
+      response.cookies.set({ name: 'auth_recovery', value: '', maxAge: 0, path: '/' });
+      response.cookies.set({ name: 'recovery_user_id', value: '', maxAge: 0, path: '/' });
+      response.cookies.set({ name: 'paystack_session', value: '', maxAge: 0, path: '/' });
+      response.cookies.set({ name: 'session_timestamp', value: '', maxAge: 0, path: '/' });
+      return response;
+    }
   }
   
   // Check if the path is public
@@ -111,7 +126,8 @@ export async function middleware(req: NextRequest) {
   }
   
   // Initialize Supabase client with the request
-  const supabase = createMiddlewareClient({ req, res: NextResponse.next() });
+  const res = NextResponse.next();
+  const supabase = createMiddlewareClient({ req, res });
   
   // Get the session from Supabase
   const { data: { session }, error } = await supabase.auth.getSession();
