@@ -18,9 +18,9 @@ export default function Navigation() {
   return (
     <>
       {/* Top notification bar */}
-      <div className="fixed top-0 left-0 right-0 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 z-50">
+      <div className="fixed top-0 left-0 right-0 bg-white border-b border-slate-200 z-50">
         <div className="max-w-md mx-auto flex justify-between items-center py-3 px-4">
-          <h1 className="text-lg font-bold text-gray-900 dark:text-white">Shipping App</h1>
+          <h1 className="text-lg font-bold text-gray-900">Shipping App</h1>
           <div>
             <NotificationDropdown />
           </div>
@@ -28,16 +28,16 @@ export default function Navigation() {
       </div>
 
       {/* Bottom navigation bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 rounded-t-3xl shadow-lg z-50 navigation-bar">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 rounded-t-3xl shadow-lg z-50 navigation-bar">
         <div className="max-w-md mx-auto flex justify-around items-center py-3 px-4">
-          <Link href="/" className={`flex flex-col items-center ${pathname === "/" ? "text-blue-600 dark:text-blue-500" : "text-slate-500 dark:text-slate-400"}`}>
+          <Link href="/" className={`flex flex-col items-center ${pathname === "/" ? "text-blue-600" : "text-slate-500"}`}>
             <Grid className="w-6 h-6" />
             <span className="text-sm mt-1">Dashboard</span>
           </Link>
 
           <Link
             href="/services"
-            className={`flex flex-col items-center ${pathname?.includes("/services") ? "text-blue-600 dark:text-blue-500" : "text-slate-500 dark:text-slate-400"}`}
+            className={`flex flex-col items-center ${pathname?.includes("/services") ? "text-blue-600" : "text-slate-500"}`}
           >
             <Heart className="w-6 h-6" />
             <span className="text-sm mt-1">Services</span>
@@ -45,7 +45,7 @@ export default function Navigation() {
 
           <Link
             href="/notifications"
-            className={`flex flex-col items-center ${pathname?.includes("/notifications") ? "text-blue-600 dark:text-blue-500" : "text-slate-500 dark:text-slate-400"}`}
+            className={`flex flex-col items-center ${pathname?.includes("/notifications") ? "text-blue-600" : "text-slate-500"}`}
           >
             <Bell className="w-6 h-6" />
             <span className="text-sm mt-1">Notifications</span>
@@ -53,7 +53,7 @@ export default function Navigation() {
 
           <Link
             href="/account"
-            className={`flex flex-col items-center ${pathname?.includes("/account") ? "text-blue-600 dark:text-blue-500" : "text-slate-500 dark:text-slate-400"}`}
+            className={`flex flex-col items-center ${pathname?.includes("/account") ? "text-blue-600" : "text-slate-500"}`}
           >
             <User className="w-6 h-6" />
             <span className="text-sm mt-1">Account</span>

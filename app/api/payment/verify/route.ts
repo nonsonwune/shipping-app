@@ -32,7 +32,8 @@ async function getUserByEmail(email: string) {
  * Verify a transaction and update user's wallet
  */
 export async function GET(request: NextRequest) {
-  const supabase = createRouteHandlerClient({ cookies });
+  // Create admin client to bypass RLS
+  const adminClient = createAdminClient();
   
   // Get the reference from the URL
   const { searchParams } = new URL(request.url);
@@ -91,7 +92,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Check if transaction already exists
-    const { data: existingTransaction } = await supabase
+    const { data: existingTransaction } = await adminClient
       .from("transactions")
       .select("*")
       .eq("reference", reference)
@@ -105,15 +106,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Insert transaction record
-    const { error: insertError } = await supabase
+    // Insert transaction record with required fields
+    const { error: insertError } = await adminClient
       .from("transactions")
       .insert({
         user_id: userId,
         amount: amountInNaira, // Store amount in naira
         reference: transaction.reference,
-        status: transaction.status,
+        status: transaction.status === "success" ? "completed" : "pending",
         payment_provider: "paystack",
+        transaction_type: "wallet_funding", // Required field 
+        type: "credit", // Required field
+        payment_gateway: "paystack",
+        payment_gateway_reference: transaction.reference,
         metadata: {
           ...transaction.metadata,
           originalAmount: transaction.amount,
@@ -130,47 +135,57 @@ export async function GET(request: NextRequest) {
 
     // Update wallet balance if transaction is successful
     if (transaction.status === "success") {
-      const { data: walletData, error: walletError } = await supabase
+      // Check if wallet exists
+      const { data: walletData, error: walletError } = await adminClient
         .from("wallets")
         .select("*")
         .eq("user_id", userId)
         .single();
 
       if (walletError) {
-        console.error("Error fetching wallet:", walletError);
-        throw new Error("Wallet not found");
-      }
-
-      console.log("DEBUG: Updating wallet balance:", {
-        currentBalance: walletData.balance,
-        amountToAdd: amountInNaira,
-        newBalance: walletData.balance + amountInNaira
-      });
-
-      const { error: updateError } = await supabase
-        .from("wallets")
-        .update({ balance: walletData.balance + amountInNaira })
-        .eq("user_id", userId);
-
-      if (updateError) {
-        console.error("Error updating wallet balance:", updateError);
-        throw new Error("Failed to update wallet balance");
-      }
-
-      // Link transaction to wallet
-      const { error: linkError } = await supabase
-        .from("wallet_transactions")
-        .insert({
-          wallet_id: walletData.id,
-          transaction_id: transaction.reference,
-          amount: amountInNaira,
-          type: "credit",
-          status: "completed"
+        // Create wallet if it doesn't exist
+        if (walletError.code === 'PGRST116') {
+          console.log("Wallet not found, creating new wallet for user:", userId);
+          const { data: newWallet, error: createError } = await adminClient
+            .from("wallets")
+            .insert({
+              user_id: userId,
+              balance: amountInNaira,
+              currency: "NGN"
+            })
+            .select()
+            .single();
+            
+          if (createError) {
+            console.error("Error creating wallet:", createError);
+            throw new Error("Failed to create wallet");
+          }
+          
+          console.log("Created new wallet with initial balance:", amountInNaira);
+        } else {
+          console.error("Error fetching wallet:", walletError);
+          throw new Error("Failed to fetch wallet data");
+        }
+      } else {
+        // Update existing wallet
+        console.log("DEBUG: Updating wallet balance:", {
+          currentBalance: walletData.balance,
+          amountToAdd: amountInNaira,
+          newBalance: walletData.balance + amountInNaira
         });
 
-      if (linkError) {
-        console.error("Error linking transaction to wallet:", linkError);
-        throw new Error("Failed to link transaction to wallet");
+        const { error: updateError } = await adminClient
+          .from("wallets")
+          .update({ 
+            balance: walletData.balance + amountInNaira,
+            last_updated: new Date().toISOString()
+          })
+          .eq("user_id", userId);
+
+        if (updateError) {
+          console.error("Error updating wallet balance:", updateError);
+          throw new Error("Failed to update wallet balance");
+        }
       }
     }
 
@@ -182,6 +197,7 @@ export async function GET(request: NextRequest) {
     redirectUrl.searchParams.set("status", "success");
     redirectUrl.searchParams.set("message", "Payment successful");
     redirectUrl.searchParams.set("session", sessionToken);
+    redirectUrl.searchParams.set("amount", amountInNaira.toString());
 
     // Create response with redirect
     const response = NextResponse.redirect(redirectUrl, { status: 303 });

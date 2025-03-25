@@ -1,13 +1,12 @@
 "use client"
 
 import type React from "react"
+import { createContext, useContext, useEffect, useState, ReactNode } from "react"
 
-import { createContext, useContext, useEffect, useState } from "react"
-
-type Theme = "light" | "dark" | "system"
+type Theme = "light"  // Only light theme is supported now
 
 type ThemeProviderProps = {
-  children: React.ReactNode
+  children: ReactNode
   defaultTheme?: Theme
   storageKey?: string
 }
@@ -18,7 +17,7 @@ type ThemeProviderState = {
 }
 
 const initialState: ThemeProviderState = {
-  theme: "system",
+  theme: "light",
   setTheme: () => null,
 }
 
@@ -26,33 +25,28 @@ const ThemeProviderContext = createContext<ThemeProviderState>(initialState)
 
 export function ThemeProvider({
   children,
-  defaultTheme = "system",
+  defaultTheme = "light",
   storageKey = "shipping-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(
-    () => (typeof window !== "undefined" && (localStorage.getItem(storageKey) as Theme)) || defaultTheme,
-  )
+  // Always use light theme
+  const [theme] = useState<Theme>("light")
 
   useEffect(() => {
     const root = window.document.documentElement
-
-    root.classList.remove("light", "dark")
-
-    if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-      root.classList.add(systemTheme)
-      return
-    }
-
-    root.classList.add(theme)
-  }, [theme])
+    
+    // Remove any other theme classes and always add light
+    root.classList.remove("dark")
+    root.classList.add("light")
+    
+    // Force light mode in localStorage
+    localStorage.setItem(storageKey, "light")
+  }, [storageKey])
 
   const value = {
-    theme,
-    setTheme: (theme: Theme) => {
-      localStorage.setItem(storageKey, theme)
-      setTheme(theme)
+    theme: "light" as Theme,
+    setTheme: () => {
+      // No-op: only light theme is supported
     },
   }
 

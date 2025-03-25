@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { initializeTransaction, verifyTransaction, generateTransactionReference } from '@/lib/paystack';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
+import { createClient as createAdminClient } from '@/lib/supabase/admin';
 
 /**
  * POST /api/payment - Initialize a payment transaction
@@ -27,32 +30,84 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Create response object early to handle cookies
-    const response = NextResponse.next();
+    // Get auth token from authorization header
+    const authHeader = request.headers.get('authorization');
+    let token = null;
     
-    // Create Supabase client with response for cookie handling
-    const supabase = await createClient();
-    
-    // Try to get the session
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    
-    if (sessionError) {
-      console.error('Session error:', sessionError);
-      return NextResponse.json(
-        { error: 'Authentication error' },
-        { status: 401 }
-      );
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+      console.log('Found auth token in Authorization header');
     }
     
+    // Create Supabase client with direct cookie handling
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return request.cookies.get(name)?.value;
+          },
+          set(name: string, value: string, options: any) {
+            // We can't set cookies here since we're in a server component
+            // This is handled in the response
+          },
+          remove(name: string, options: any) {
+            // We can't remove cookies here since we're in a server component
+            // This is handled in the response
+          },
+        },
+      }
+    );
+    
+    // Try to get session from token if available
+    let session = null;
+    
+    if (token) {
+      const { data, error } = await supabase.auth.getUser(token);
+      if (!error && data?.user) {
+        // Manually create a session for the authenticated user
+        console.log('Successfully authenticated user from token:', data.user.id);
+        session = {
+          user: data.user,
+          access_token: token
+        };
+      } else {
+        console.error('Failed to authenticate with provided token:', error);
+      }
+    }
+    
+    // If no session from token, try regular session
     if (!session) {
-      console.log('No session found');
+      const { data: { session: cookieSession }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        return NextResponse.json(
+          { error: 'Authentication error' },
+          { status: 401 }
+        );
+      }
+      
+      if (!cookieSession) {
+        console.log('No session found');
+        return NextResponse.json(
+          { error: 'You must be logged in to make a payment' },
+          { status: 401 }
+        );
+      }
+      
+      session = cookieSession;
+    }
+    
+    // Get user details
+    if (!session || !session.user) {
       return NextResponse.json(
-        { error: 'You must be logged in to make a payment' },
+        { error: 'Authentication failed' },
         { status: 401 }
       );
     }
-
-    // Get user details
+    
     const userEmail = session.user.email || '';
     const userId = session.user.id;
     
@@ -74,6 +129,17 @@ export async function POST(request: NextRequest) {
       conversionRate: 100
     });
 
+    // Determine the callback URL - use environment variable or construct from request
+    const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || 
+                      `${request.headers.get('x-forwarded-proto') || 'http'}://${request.headers.get('x-forwarded-host')}`;
+    const callbackUrl = `${appBaseUrl}/api/payment/verify`;
+    
+    console.log("Using callback URL base:", appBaseUrl);
+    console.log("Full callback URL:", callbackUrl);
+
+    // Generate a unique reference for this transaction
+    const reference = `TXN-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+
     const paystackResponse = await fetch("https://api.paystack.co/transaction/initialize", {
       method: "POST",
       headers: {
@@ -83,7 +149,8 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         email: userEmail,
         amount: amount * 100, // Convert to kobo for Paystack
-        reference: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+        reference: reference,
+        callback_url: `${callbackUrl}?reference=${reference}`, // Include reference in callback URL
         metadata: {
           userId,
           originalAmount: amount, // Store original amount in naira
@@ -102,7 +169,8 @@ export async function POST(request: NextRequest) {
 
     // Store transaction in database
     console.log("Storing transaction in database...");
-    const { error: insertError } = await supabase
+    const adminClient = createAdminClient();
+    const { error: insertError } = await adminClient
       .from("transactions")
       .insert({
         user_id: userId,
@@ -110,6 +178,8 @@ export async function POST(request: NextRequest) {
         reference: paystackData.data.reference,
         status: "pending",
         payment_provider: "paystack",
+        transaction_type: "wallet_funding",
+        type: "credit",
         metadata: {
           paystackReference: paystackData.data.reference,
           originalAmount: amount,
@@ -124,8 +194,8 @@ export async function POST(request: NextRequest) {
       throw new Error("Failed to store transaction");
     }
 
-    // Set success response with preserved session
-    const successResponse = NextResponse.json({
+    // Set success response
+    return NextResponse.json({
       status: "success",
       data: {
         reference: paystackData.data.reference,
@@ -133,78 +203,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Preserve auth cookies
-    const authCookies = request.cookies.getAll()
-      .filter(cookie => cookie.name.startsWith('sb-'));
-    
-    authCookies.forEach(cookie => {
-      successResponse.cookies.set({
-        name: cookie.name,
-        value: cookie.value,
-        httpOnly: true,
-        path: '/',
-        maxAge: 60 * 60 * 24 * 7, // 1 week
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production'
-      });
-    });
-
-    // Set recovery cookies
-    successResponse.cookies.set({
-      name: 'auth_recovery',
-      value: 'true',
-      path: '/',
-      maxAge: 60 * 60, // 1 hour
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
-    });
-
-    successResponse.cookies.set({
-      name: 'recovery_user_id',
-      value: userId,
-      path: '/',
-      maxAge: 60 * 60, // 1 hour
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
-    });
-
-    successResponse.cookies.set({
-      name: 'session_timestamp',
-      value: Date.now().toString(),
-      path: '/',
-      maxAge: 60 * 60, // 1 hour
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
-    });
-
-    return successResponse;
-
   } catch (error) {
     console.error("Payment initialization error:", error);
     
-    // Create error response with preserved session
-    const errorResponse = NextResponse.json(
+    return NextResponse.json(
       { error: "Failed to initialize payment" },
       { status: 500 }
     );
-
-    // Preserve auth cookies even on error
-    const authCookies = request.cookies.getAll()
-      .filter(cookie => cookie.name.startsWith('sb-'));
-    
-    authCookies.forEach(cookie => {
-      errorResponse.cookies.set({
-        name: cookie.name,
-        value: cookie.value,
-        httpOnly: true,
-        path: '/',
-        maxAge: 60 * 60 * 24 * 7, // 1 week
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production'
-      });
-    });
-
-    return errorResponse;
   }
 }
 
@@ -261,8 +266,11 @@ export async function GET(request: NextRequest) {
     // Only update database if verification is successful
     if (verificationResult.data.status === 'success') {
       try {
+        // Create the admin client to bypass RLS
+        const adminClient = createAdminClient();
+        
         // Check if transaction exists in our database
-        const { data: existingTransaction, error: queryError } = await supabase
+        const { data: existingTransaction, error: queryError } = await adminClient
           .from('transactions')
           .select('*')
           .eq('reference', reference)
@@ -274,7 +282,7 @@ export async function GET(request: NextRequest) {
 
         if (existingTransaction) {
           // Update existing transaction
-          const { error } = await supabase
+          const { error } = await adminClient
             .from('transactions')
             .update({
               status: 'completed',
@@ -287,7 +295,7 @@ export async function GET(request: NextRequest) {
           }
         } else {
           // Create a new transaction record if it doesn't exist
-          const { error } = await supabase
+          const { error } = await adminClient
             .from('transactions')
             .insert({
               user_id: data.session.user.id,

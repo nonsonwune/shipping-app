@@ -118,6 +118,7 @@ export function FundWalletModal({
         "Content-Type": "application/json",
       }
       
+      // Always include the auth token in the headers if available
       if (sessionToken) {
         headers["Authorization"] = `Bearer ${sessionToken}`
       }
@@ -137,7 +138,7 @@ export function FundWalletModal({
       
       if (!response.ok) {
         // Try to get detailed error information
-        const errorData = await response.json().catch(() => null)
+        const errorData = await response.json().catch(() => ({}));
         console.error("Payment API error:", {
           status: response.status,
           statusText: response.statusText,
@@ -145,32 +146,44 @@ export function FundWalletModal({
         })
         
         if (response.status === 401) {
-          // Try to recover session
-          const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+          // Try to refresh the session and get a new token
+          console.log("Authentication error. Attempting to refresh session...")
+          const { data, error } = await supabase.auth.refreshSession();
           
-          if (sessionError || !session) {
-            throw new Error("Authentication failed. Please log out and log in again.")
+          if (error || !data.session) {
+            throw new Error("Authentication failed. Please log out and log in again.");
           }
           
+          // Update the token in component state
+          setSessionToken(data.session.access_token);
+          
           // Retry with new session token
-          headers["Authorization"] = `Bearer ${session.access_token}`
           const retryResponse = await fetch("/api/payment", {
             method: "POST",
-            headers,
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${data.session.access_token}`
+            },
             credentials: "include",
             body: JSON.stringify({
               amount: amountInNaira,
               email: userEmail,
             }),
-          })
+          });
           
           if (!retryResponse.ok) {
+            const retryErrorData = await retryResponse.json().catch(() => ({}));
+            console.error("Payment retry failed:", {
+              status: retryResponse.status,
+              statusText: retryResponse.statusText,
+              errorData: retryErrorData
+            });
             throw new Error("Authentication failed after retry. Please log out and log in again.")
           }
           
-          const result = await retryResponse.json()
-          handlePaymentSuccess(result)
-          return
+          const result = await retryResponse.json();
+          handlePaymentSuccess(result);
+          return;
         } else {
           throw new Error(errorData?.error || `Server error: ${response.status}`)
         }
@@ -179,12 +192,21 @@ export function FundWalletModal({
       const result = await response.json()
       handlePaymentSuccess(result)
     } catch (error: any) {
-      console.error("Payment initiation error:", error)
+      console.error("Payment initiation error:", error);
       toast({
         title: "Payment Error",
         description: error.message || "Failed to process payment. Please try again.",
         variant: "destructive",
-      })
+      });
+      
+      // If we have an authentication error, try to log the user out and in again
+      if (error.message && error.message.includes("Authentication failed")) {
+        toast({
+          title: "Session Expired",
+          description: "Your session has expired. Please log out and log in again.",
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsLoading(false)
     }
