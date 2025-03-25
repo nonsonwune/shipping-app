@@ -105,74 +105,109 @@ export async function GET(request: NextRequest) {
       if (existingTransaction.status === "pending" && transaction.status === "success") {
         console.log("Updating transaction status from pending to completed");
         
-        const { error: updateError } = await adminClient
-          .from("transactions")
-          .update({
-            status: "completed",
-            updated_at: new Date().toISOString(),
-            metadata: {
-              ...existingTransaction.metadata,
-              paystack_verification: transaction,
-              verificationTimestamp: new Date().toISOString()
-            }
-          })
-          .eq("reference", reference);
-          
-        if (updateError) {
-          console.error("Error updating transaction status:", updateError);
+        // Check if wallet has already been updated for this transaction
+        const walletUpdated = existingTransaction.metadata?.wallet_updated === true;
+        
+        if (walletUpdated) {
+          console.log("Wallet already updated for this transaction, skipping update");
         } else {
-          console.log("Transaction status updated to completed");
-          
-          // Update wallet balance
-          // Check if wallet exists
-          const { data: walletData, error: walletError } = await adminClient
-            .from("wallets")
-            .select("*")
-            .eq("user_id", userId)
-            .single();
+          // Update transaction first to mark it as processing
+          const { error: updateError } = await adminClient
+            .from("transactions")
+            .update({
+              status: "completed",
+              updated_at: new Date().toISOString(),
+              metadata: {
+                ...existingTransaction.metadata,
+                processing_wallet_update: true,
+                paystack_verification: transaction,
+                verificationTimestamp: new Date().toISOString()
+              }
+            })
+            .eq("reference", reference);
+            
+          if (updateError) {
+            console.error("Error updating transaction status:", updateError);
+          } else {
+            console.log("Transaction status updated to completed");
+            
+            // Update wallet balance
+            // Check if wallet exists
+            const { data: walletData, error: walletError } = await adminClient
+              .from("wallets")
+              .select("*")
+              .eq("user_id", userId)
+              .single();
 
-          if (walletError) {
-            // Create wallet if it doesn't exist
-            if (walletError.code === 'PGRST116') {
-              console.log("Wallet not found, creating new wallet for user:", userId);
-              const { data: newWallet, error: createError } = await adminClient
-                .from("wallets")
-                .insert({
-                  user_id: userId,
-                  balance: amountInNaira,
-                  currency: "NGN"
-                })
-                .select()
-                .single();
-                
-              if (createError) {
-                console.error("Error creating wallet:", createError);
+            if (walletError) {
+              // Create wallet if it doesn't exist
+              if (walletError.code === 'PGRST116') {
+                console.log("Wallet not found, creating new wallet for user:", userId);
+                const { data: newWallet, error: createError } = await adminClient
+                  .from("wallets")
+                  .insert({
+                    user_id: userId,
+                    balance: amountInNaira,
+                    currency: "NGN"
+                  })
+                  .select()
+                  .single();
+                  
+                if (createError) {
+                  console.error("Error creating wallet:", createError);
+                } else {
+                  console.log("Created new wallet with initial balance:", amountInNaira);
+                  
+                  // Mark transaction as having updated the wallet
+                  await adminClient
+                    .from("transactions")
+                    .update({
+                      metadata: {
+                        ...existingTransaction.metadata,
+                        wallet_updated: true,
+                        paystack_verification: transaction,
+                        verificationTimestamp: new Date().toISOString()
+                      }
+                    })
+                    .eq("reference", reference);
+                }
               } else {
-                console.log("Created new wallet with initial balance:", amountInNaira);
+                console.error("Error fetching wallet:", walletError);
               }
             } else {
-              console.error("Error fetching wallet:", walletError);
-            }
-          } else {
-            // Update existing wallet
-            console.log("DEBUG: Updating wallet balance:", {
-              currentBalance: walletData.balance,
-              amountToAdd: amountInNaira,
-              newBalance: walletData.balance + amountInNaira
-            });
+              // Update existing wallet
+              console.log("DEBUG: Updating wallet balance:", {
+                currentBalance: walletData.balance,
+                amountToAdd: amountInNaira,
+                newBalance: walletData.balance + amountInNaira
+              });
 
-            const { error: updateError } = await adminClient
-              .from("wallets")
-              .update({ 
-                balance: walletData.balance + amountInNaira,
-                last_updated: new Date().toISOString()
-              })
-              .eq("user_id", userId);
+              const { error: updateError } = await adminClient
+                .from("wallets")
+                .update({ 
+                  balance: walletData.balance + amountInNaira,
+                  last_updated: new Date().toISOString()
+                })
+                .eq("user_id", userId);
 
-            if (updateError) {
-              console.error("Error updating wallet balance:", updateError);
-            } else {
-              console.log("Wallet balance updated successfully");
+              if (updateError) {
+                console.error("Error updating wallet balance:", updateError);
+              } else {
+                console.log("Wallet balance updated successfully");
+                
+                // Mark transaction as having updated the wallet
+                await adminClient
+                  .from("transactions")
+                  .update({
+                    metadata: {
+                      ...existingTransaction.metadata,
+                      wallet_updated: true,
+                      paystack_verification: transaction,
+                      verificationTimestamp: new Date().toISOString()
+                    }
+                  })
+                  .eq("reference", reference);
+              }
             }
           }
         }
@@ -240,6 +275,21 @@ export async function GET(request: NextRequest) {
           }
           
           console.log("Created new wallet with initial balance:", amountInNaira);
+          
+          // Mark transaction as having updated the wallet
+          await adminClient
+            .from("transactions")
+            .update({
+              metadata: {
+                ...transaction.metadata,
+                wallet_updated: true,
+                originalAmount: transaction.amount,
+                amountInNaira,
+                conversionRate: 100,
+                verificationTimestamp: new Date().toISOString()
+              }
+            })
+            .eq("reference", reference);
         } else {
           console.error("Error fetching wallet:", walletError);
           throw new Error("Failed to fetch wallet data");
@@ -264,6 +314,21 @@ export async function GET(request: NextRequest) {
           console.error("Error updating wallet balance:", updateError);
           throw new Error("Failed to update wallet balance");
         }
+        
+        // Mark transaction as having updated the wallet
+        await adminClient
+          .from("transactions")
+          .update({
+            metadata: {
+              ...transaction.metadata,
+              wallet_updated: true,
+              originalAmount: transaction.amount,
+              amountInNaira,
+              conversionRate: 100,
+              verificationTimestamp: new Date().toISOString()
+            }
+          })
+          .eq("reference", reference);
       }
     }
 
