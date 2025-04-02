@@ -155,7 +155,7 @@ export default function AdminLayout({
 
   // Render the admin layout with navigation and header
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen bg-background">
       <AdminNav />
       <div className="flex flex-1 flex-col overflow-hidden">
         <AdminHeader user={userInfo} />

@@ -30,6 +30,12 @@ export default function NotificationsPage() {
         setLoading(true)
         
         // Get the current session
+        if (!supabase) {
+          console.error("Supabase client not initialized");
+          // Optionally redirect or show an error message
+          router.push("/auth/sign-in?error=client_init_failed");
+          return;
+        }
         const { data: { session } } = await supabase.auth.getSession()
         
         if (!session) {
@@ -73,6 +79,10 @@ export default function NotificationsPage() {
       
       // Update in database if available
       try {
+        if (!supabase) {
+          console.error("Supabase client not initialized");
+          return; // Don't attempt DB update if client is null
+        }
         const { error } = await supabase
           .from("notifications")
           .update({ is_read: true })
@@ -96,6 +106,10 @@ export default function NotificationsPage() {
       
       // Update in database if available
       try {
+        if (!supabase) {
+          console.error("Supabase client not initialized");
+          return; // Don't attempt DB update if client is null
+        }
         const { data: { session } } = await supabase.auth.getSession()
         
         if (session) {
@@ -194,7 +208,7 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="p-4 pb-20">
+    <div className="p-4 pb-20 bg-background">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center">
           <Link href="/" className="mr-4">
