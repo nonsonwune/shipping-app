@@ -16,6 +16,18 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
  * This client bypasses Row Level Security (RLS)
  */
 export function createClient() {
+  // Add Debugging
+  console.log("DEBUG: Attempting to create admin Supabase client with URL:", supabaseUrl);
+  if (supabaseUrl) {
+    try {
+      console.log("DEBUG: Project ref from URL:", supabaseUrl.split('https://')[1]?.split('.')[0]);
+    } catch (e) {
+      console.error("DEBUG: Error parsing Supabase URL for project ref", e);
+    }
+  } else {
+    console.warn("DEBUG: supabaseUrl is not defined");
+  }
+
   // Browser-side safety check
   if (typeof window !== 'undefined') {
     throw new Error(

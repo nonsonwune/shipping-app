@@ -123,19 +123,32 @@ export async function POST(request: NextRequest) {
 
     // Initialize Paystack transaction
     console.log("Initializing Paystack transaction...");
+
+    // Add Debugging for Amount Conversion
+    const amountInKobo = amount * 100;
     console.log("DEBUG: Amount conversion for Paystack:", {
       originalAmount: amount,
-      amountInKobo: amount * 100,
+      amountInKobo: amountInKobo,
       conversionRate: 100
     });
 
-    // Determine the callback URL - use environment variable or construct from request
-    const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || 
-                      `${request.headers.get('x-forwarded-proto') || 'http'}://${request.headers.get('x-forwarded-host')}`;
-    const callbackUrl = `${appBaseUrl}/api/payment/verify`;
+    // Determine the callback URL - use the PUBLIC URL for Paystack
+    // Use x-forwarded headers (set by ngrok/proxies) or fallback to host header
+    const protocol = request.headers.get('x-forwarded-proto') || 'http';
+    // Use x-forwarded-host if available (includes port sometimes), otherwise use host
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host');
     
-    console.log("Using callback URL base:", appBaseUrl);
-    console.log("Full callback URL:", callbackUrl);
+    if (!host) {
+        console.error("Could not determine host for callback URL");
+        throw new Error("Could not determine host for callback URL");
+    }
+    
+    const appBaseUrl = `${protocol}://${host}`;
+    
+    // Use the dynamically determined public base URL
+    console.log("DEBUG: Using DYNAMIC callback URL base:", appBaseUrl);
+    const callbackUrl = `${appBaseUrl}/api/payment/verify`;
+    console.log("DEBUG: Full DYNAMIC callback URL:", callbackUrl);
 
     // Generate a unique reference for this transaction
     const reference = `TXN-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
@@ -148,7 +161,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         email: userEmail,
-        amount: amount * 100, // Convert to kobo for Paystack
+        amount: amountInKobo, // Use the calculated kobo amount
         reference: reference,
         callback_url: `${callbackUrl}?reference=${reference}`, // Include reference in callback URL
         metadata: {
@@ -183,7 +196,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           paystackReference: paystackData.data.reference,
           originalAmount: amount,
-          amountInKobo: amount * 100,
+          amountInKobo: amountInKobo,
           conversionRate: 100,
           timestamp: new Date().toISOString()
         }

@@ -20,7 +20,7 @@ import {
   TabsList, 
   TabsTrigger 
 } from "@/components/ui/tabs"
-import { createClient, getSession, recoverSession } from "@/lib/supabase/client"
+import { createClient, getSession, recoverSession, persistSession } from "@/lib/supabase/client"
 import { FundWalletModal } from "@/components/fund-wallet-modal"
 import { formatCurrency } from "@/lib/paystack"
 import { useToast } from "@/components/ui/use-toast"
@@ -55,6 +55,9 @@ function WalletContent() {
   const [userEmail, setUserEmail] = useState("");
   const { toast } = useToast();
 
+  // Add state for session tracking
+  const [session, setSession] = useState<any>(null);
+
   // Handle status and session params from payment verification
   const status = searchParams?.get("status") || null;
   const message = searchParams?.get("message") || null;
@@ -82,6 +85,9 @@ function WalletContent() {
           
           // Show success toast if coming from payment
           if (status === 'success') {
+            // Try to ensure session persistence
+            await persistSession();
+
             toast({
               title: "Payment Successful",
               description: "Your wallet has been funded successfully.",
@@ -122,7 +128,44 @@ function WalletContent() {
     if (status === 'success' || !isSessionRecoveryAttempted) {
       attemptSessionRecovery();
     }
+
+    // Add mount/unmount logging
+    console.log("WALLET PAGE: Mount");
+    return () => {
+      console.log("WALLET PAGE: Unmount");
+    };
   }, [searchParams, isSessionRecoveryAttempted, status, toast, router]);
+
+  // Effect to log auth state on change
+  useEffect(() => {
+    const checkSessionAndLog = async () => {
+      const { session: currentSession } = await getSession();
+      setSession(currentSession); // Update state
+      console.log("WALLET PAGE: Auth State Check", {
+        isAuthenticated: !!currentSession,
+        userId: currentSession?.user?.id,
+        cookies: document.cookie.split(';')
+          .filter(c => c.includes('-auth-token'))
+          .map(c => c.trim().substring(0, 30) + '...')
+      });
+    };
+    checkSessionAndLog();
+    
+    // Set up listener for auth changes
+    const supabase = createClient();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log("WALLET PAGE: Auth State Change Event", { 
+        event: _event,
+        isAuthenticated: !!session,
+        userId: session?.user?.id
+      });
+      setSession(session);
+    });
+
+    return () => {
+      subscription?.unsubscribe();
+    };
+  }, []);
 
   // Function to fetch wallet data
   const fetchWalletData = async () => {

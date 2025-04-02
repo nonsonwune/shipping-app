@@ -61,6 +61,16 @@ export async function middleware(req: NextRequest) {
   console.log("====== AUTH MIDDLEWARE LOG ======");
   console.log(`Path: ${req.nextUrl.pathname}`);
   
+  // Add Cookie Debugging
+  try {
+    console.log("COOKIE DEBUG: Auth cookies present:",
+      req.cookies.getAll().filter(c => c.name.includes('-auth-token'))
+        .map(c => `${c.name.substring(0, 30)}...=${c.value.substring(0, 10)}...`)
+    );
+  } catch (e) {
+    console.error("COOKIE DEBUG: Error reading cookies", e);
+  }
+  
   // Get the path requested
   const { pathname } = req.nextUrl;
   

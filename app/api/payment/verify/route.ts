@@ -143,6 +143,7 @@ export async function GET(request: NextRequest) {
 
     // Get current wallet balance for logging
     let initialWalletBalance = 0;
+    let initialLastUpdated = null;
     try {
       const { data: walletData } = await adminClient
         .from("wallets")
@@ -151,11 +152,14 @@ export async function GET(request: NextRequest) {
         .single();
       if (walletData) {
         initialWalletBalance = walletData.balance;
+        initialLastUpdated = walletData.last_updated;
         console.log(`[${requestId}] WALLET BALANCE CHECK: Initial balance =`, initialWalletBalance);
-        console.log(`[${requestId}] WALLET BALANCE CHECK: Last updated =`, walletData.last_updated);
+        console.log(`[${requestId}] WALLET BALANCE CHECK: Last updated =`, initialLastUpdated);
+      } else {
+        console.log(`[${requestId}] No existing wallet found for initial balance check`);
       }
     } catch (error) {
-      console.log(`[${requestId}] No existing wallet found for initial balance check`);
+      console.log(`[${requestId}] Error checking initial wallet balance:`, error);
     }
 
     // Mark transaction as being processed to prevent duplicates
@@ -216,102 +220,109 @@ export async function GET(request: NextRequest) {
           // Fallback to manual update if RPC is not available
           console.log(`[${requestId}] Falling back to manual update logic`);
           try {
-            // First, update transaction to include processing flag
-            console.log(`[${requestId}] Updating transaction with processing flag`);
-            const { error: updateError } = await adminClient
+            // --- Refined Fallback Logic --- 
+            
+            // 1. Re-fetch the transaction within the fallback to get the absolute latest state
+            console.log(`[${requestId}] Re-fetching transaction state before manual update`);
+            const { data: currentTxState, error: fetchError } = await adminClient
+              .from("transactions")
+              .select("status, metadata")
+              .eq("reference", reference)
+              .single();
+
+            if (fetchError || !currentTxState) {
+                console.error(`[${requestId}] Failed to re-fetch transaction state:`, fetchError);
+                throw new Error("Failed to confirm transaction state before manual update.");
+            }
+
+            // 2. Check AGAIN if wallet was updated, potentially by a concurrent request or previous step
+            const walletAlreadyUpdated = currentTxState.metadata?.wallet_updated === true;
+            console.log(`[${requestId}] Manual Fallback Check: Wallet already updated? ${walletAlreadyUpdated}`);
+
+            if (walletAlreadyUpdated) {
+                console.log(`[${requestId}] Manual Fallback: Wallet already updated, skipping duplicate update.`);
+            } else if (currentTxState.status !== 'completed') {
+                // 3. Only proceed if wallet not updated and transaction isn't already marked completed
+                
+                // First, try to mark the transaction as completed and wallet_updated=true atomically
+                console.log(`[${requestId}] Attempting to mark transaction completed/wallet_updated before balance update`);
+                const { error: markError } = await adminClient
               .from("transactions")
               .update({
                 status: "completed",
                 updated_at: new Date().toISOString(),
                 metadata: {
-                  ...existingTransaction.metadata,
-                  processing_wallet_update: true,
-                  verificationTimestamp: new Date().toISOString()
-                }
-              })
-              .eq("reference", reference);
-              
-            if (updateError) {
-              console.error(`[${requestId}] Error updating transaction:`, updateError);
+                      ...currentTxState.metadata, // Use re-fetched metadata
+                      wallet_updated: true, // Mark as updated NOW
+                      wallet_update_timestamp: new Date().toISOString(),
+                      paystack_verification: transaction, // Log paystack data
+                      verificationTimestamp: new Date().toISOString(),
+                      manual_fallback_update: true // Flag that fallback was used
+                    }
+                  })
+                  .eq("reference", reference)
+                  // Add a condition to prevent race conditions if another process updated it concurrently
+                  .eq("metadata->>wallet_updated", false); // Only update if wallet_updated is still false 
+                                                        // Note: ->> might require casting metadata to jsonb if not already
+                                                        // Or use: .filter('metadata->>wallet_updated', 'is', 'false')
+                                                        // Adjust based on your exact table schema
+                
+                if (markError) {
+                    // This could fail if the concurrent update condition wasn't met (race condition)
+                    console.error(`[${requestId}] Error marking transaction completed/wallet_updated:`, markError);
+                    // Potentially re-fetch and check status again, or rely on next request
+                    throw new Error("Failed to mark transaction before wallet update.");
             } else {
-              console.log(`[${requestId}] Transaction updated with processing flag`);
-            }
+                    console.log(`[${requestId}] Transaction successfully marked completed/wallet_updated.`);
             
-            // Now check wallet and update it
-            console.log(`[${requestId}] Checking if wallet exists`);
+                    // 4. NOW update the wallet balance (consider using DB function/transaction here too if possible)
+                    console.log(`[${requestId}] Proceeding with wallet balance update.`);
             const { data: walletData, error: walletError } = await adminClient
               .from("wallets")
-              .select("*")
+                      .select("balance") // Only select balance
               .eq("user_id", userId)
               .single();
   
-            if (walletError) {
-              // Create wallet if it doesn't exist
-              if (walletError.code === 'PGRST116') {
-                console.log(`[${requestId}] Wallet not found, creating new wallet for user:`, userId);
-                const { error: createError } = await adminClient
-                  .from("wallets")
-                  .insert({
-                    user_id: userId,
-                    balance: amountInNaira,
-                    currency: "NGN"
-                  });
-                  
-                if (createError) {
-                  console.error(`[${requestId}] Error creating wallet:`, createError);
-                } else {
-                  console.log(`[${requestId}] Created new wallet with initial balance:`, amountInNaira);
-                }
-              } else {
-                console.error(`[${requestId}] Error fetching wallet:`, walletError);
-                throw walletError;
-              }
-            } else {
-              // Update existing wallet
-              console.log(`[${requestId}] Updating existing wallet balance:`, {
-                currentBalance: walletData.balance,
+                    if (walletError && walletError.code !== 'PGRST116') {
+                        console.error(`[${requestId}] Error fetching wallet for update:`, walletError);
+                        throw walletError; // Rethrow if not 'not found'
+                    }
+
+                    const currentBalance = walletData?.balance || 0;
+                    const newBalance = currentBalance + amountInNaira;
+
+                    console.log(`[${requestId}] Updating wallet balance:`, {
+                      currentBalance: currentBalance,
                 amountToAdd: amountInNaira,
-                newBalance: walletData.balance + amountInNaira
+                      newBalance: newBalance
               });
   
-              const { error: updateWalletError } = await adminClient
+                    // Use upsert for wallet - creates if not exists, updates if exists
+                    const { error: upsertWalletError } = await adminClient
                 .from("wallets")
-                .update({ 
-                  balance: walletData.balance + amountInNaira,
+                        .upsert({ 
+                            user_id: userId,
+                            balance: newBalance, 
+                            currency: 'NGN', // Assuming NGN
                   last_updated: new Date().toISOString()
-                })
-                .eq("user_id", userId);
-              
-              if (updateWalletError) {
-                console.error(`[${requestId}] Error updating wallet:`, updateWalletError);
+                        }, { onConflict: 'user_id' }); // Specify conflict column
+                        
+                    if (upsertWalletError) {
+                      console.error(`[${requestId}] Error upserting wallet:`, upsertWalletError);
+                      // IMPORTANT: Consider how to handle this failure. Revert transaction status?
+                      throw upsertWalletError;
               } else {
-                console.log(`[${requestId}] Wallet balance updated successfully`);
-              }
-            }
-            
-            // Finally, mark transaction as having updated the wallet
-            console.log(`[${requestId}] Marking transaction as wallet_updated = true`);
-            const { error: finalUpdateError } = await adminClient
-              .from("transactions")
-              .update({
-                metadata: {
-                  ...existingTransaction.metadata,
-                  wallet_updated: true,
-                  wallet_update_timestamp: new Date().toISOString(),
-                  paystack_verification: transaction,
-                  verificationTimestamp: new Date().toISOString()
+                      console.log(`[${requestId}] Wallet balance upserted successfully.`);
+                    }
                 }
-              })
-              .eq("reference", reference);
-            
-            if (finalUpdateError) {
-              console.error(`[${requestId}] Error marking transaction as updated:`, finalUpdateError);
             } else {
-              console.log(`[${requestId}] Transaction marked as wallet_updated = true`);
+                console.log(`[${requestId}] Manual Fallback: Transaction status already 'completed' or wallet_updated=true, skipping balance update.`);
             }
+            // --- End Refined Fallback Logic ---
           } catch (error) {
             console.error(`[${requestId}] Error in manual wallet update:`, error);
-            throw error;
+            // Do not re-throw here, allow redirect to success page but log the error
+            // The transaction might be marked updated, but balance failed. Needs monitoring.
           }
         } else {
           console.log(`[${requestId}] Wallet and transaction updated successfully via DB transaction`);
@@ -325,13 +336,19 @@ export async function GET(request: NextRequest) {
             .eq("user_id", userId)
             .single();
           if (finalWalletData) {
+            const addedAmount = finalWalletData.balance - initialWalletBalance;
             console.log(`[${requestId}] WALLET BALANCE CHECK: Final balance =`, finalWalletData.balance);
             console.log(`[${requestId}] WALLET BALANCE CHECK: Last updated =`, finalWalletData.last_updated);
-            console.log(`[${requestId}] WALLET BALANCE CHECK: Difference =`, finalWalletData.balance - initialWalletBalance);
+            console.log(`[${requestId}] WALLET BALANCE CHECK: Calculated Difference =`, addedAmount);
+
+            // Debugging for amount comparison
+            console.log(`[${requestId}] WALLET DEBUG: Amount added = ${addedAmount}, Expected amount = ${amountInNaira}`);
             
-            if (finalWalletData.balance - initialWalletBalance !== amountInNaira) {
-              console.error(`[${requestId}] WALLET BALANCE MISMATCH: Expected to add ${amountInNaira} but added ${finalWalletData.balance - initialWalletBalance}`);
+            if (Math.abs(addedAmount - amountInNaira) > 0.01) { // Use tolerance for float comparison
+              console.error(`[${requestId}] WALLET BALANCE MISMATCH: Expected to add ${amountInNaira} but added ${addedAmount}`);
             }
+          } else {
+            console.log(`[${requestId}] Could not check final wallet balance.`);
           }
         } catch (error) {
           console.log(`[${requestId}] Error checking final wallet balance:`, error);
@@ -415,80 +432,105 @@ export async function GET(request: NextRequest) {
         // Fallback to manual update
         console.log(`[${requestId}] Falling back to manual update for new transaction`);
         try {
-          // Check if wallet exists
-          console.log(`[${requestId}] Checking if wallet exists for new transaction`);
-          const { data: walletData, error: walletError } = await adminClient
-            .from("wallets")
-            .select("*")
-            .eq("user_id", userId)
+          // --- Refined Fallback Logic --- 
+          
+          // 1. Re-fetch the transaction within the fallback to get the absolute latest state
+          console.log(`[${requestId}] Re-fetching transaction state before manual update`);
+          const { data: currentTxState, error: fetchError } = await adminClient
+            .from("transactions")
+            .select("status, metadata")
+            .eq("reference", reference)
             .single();
 
-          if (walletError) {
-            // Create wallet if it doesn't exist
-            if (walletError.code === 'PGRST116') {
-              console.log(`[${requestId}] Wallet not found, creating new wallet for user:`, userId);
-              const { error: createError } = await adminClient
-                .from("wallets")
-                .insert({
-                  user_id: userId,
-                  balance: amountInNaira,
-                  currency: "NGN"
-                });
-                
-              if (createError) {
-                console.error(`[${requestId}] Error creating wallet for new transaction:`, createError);
-              } else {
-                console.log(`[${requestId}] Created new wallet with initial balance:`, amountInNaira);
-              }
-            } else {
-              console.error(`[${requestId}] Error fetching wallet for new transaction:`, walletError);
-              throw walletError;
-            }
-          } else {
-            // Update existing wallet
-            console.log(`[${requestId}] Updating existing wallet balance for new transaction:`, {
-              currentBalance: walletData.balance,
-              amountToAdd: amountInNaira,
-              newBalance: walletData.balance + amountInNaira
-            });
-
-            const { error: updateError } = await adminClient
-              .from("wallets")
-              .update({ 
-                balance: walletData.balance + amountInNaira,
-                last_updated: new Date().toISOString()
-              })
-              .eq("user_id", userId);
-              
-            if (updateError) {
-              console.error(`[${requestId}] Error updating wallet for new transaction:`, updateError);
-            } else {
-              console.log(`[${requestId}] Wallet balance updated successfully for new transaction`);
-            }
+          if (fetchError || !currentTxState) {
+              console.error(`[${requestId}] Failed to re-fetch transaction state:`, fetchError);
+              throw new Error("Failed to confirm transaction state before manual update.");
           }
-          
-          // Mark transaction as having updated the wallet
-          console.log(`[${requestId}] Marking new transaction as wallet_updated = true`);
+
+          // 2. Check AGAIN if wallet was updated, potentially by a concurrent request or previous step
+          const walletAlreadyUpdated = currentTxState.metadata?.wallet_updated === true;
+          console.log(`[${requestId}] Manual Fallback Check: Wallet already updated? ${walletAlreadyUpdated}`);
+
+          if (walletAlreadyUpdated) {
+              console.log(`[${requestId}] Manual Fallback: Wallet already updated, skipping duplicate update.`);
+          } else if (currentTxState.status !== 'completed') {
+              // 3. Only proceed if wallet not updated and transaction isn't already marked completed
+              
+              // First, try to mark the transaction as completed and wallet_updated=true atomically
+              console.log(`[${requestId}] Attempting to mark transaction completed/wallet_updated before balance update`);
           const { error: markError } = await adminClient
             .from("transactions")
             .update({
+                  status: "completed",
+                  updated_at: new Date().toISOString(),
               metadata: {
-                ...transaction.metadata,
-                wallet_updated: true,
+                    ...currentTxState.metadata, // Use re-fetched metadata
+                    wallet_updated: true, // Mark as updated NOW
                 wallet_update_timestamp: new Date().toISOString(),
-                originalAmount: transaction.amount,
-                amountInNaira,
-                conversionRate: 100,
-                verificationTimestamp: new Date().toISOString()
-              }
-            })
-            .eq("reference", reference);
+                    paystack_verification: transaction, // Log paystack data
+                    verificationTimestamp: new Date().toISOString(),
+                    manual_fallback_update: true // Flag that fallback was used
+                  }
+                })
+                .eq("reference", reference)
+                // Add a condition to prevent race conditions if another process updated it concurrently
+                .eq("metadata->>wallet_updated", false); // Only update if wallet_updated is still false 
+                                                      // Note: ->> might require casting metadata to jsonb if not already
+                                                      // Or use: .filter('metadata->>wallet_updated', 'is', 'false')
+                                                      // Adjust based on your exact table schema
             
           if (markError) {
-            console.error(`[${requestId}] Error marking new transaction as updated:`, markError);
+                  // This could fail if the concurrent update condition wasn't met (race condition)
+                  console.error(`[${requestId}] Error marking transaction completed/wallet_updated:`, markError);
+                  // Potentially re-fetch and check status again, or rely on next request
+                  throw new Error("Failed to mark transaction before wallet update.");
+              } else {
+                  console.log(`[${requestId}] Transaction successfully marked completed/wallet_updated.`);
+                  
+                  // 4. NOW update the wallet balance (consider using DB function/transaction here too if possible)
+                  console.log(`[${requestId}] Proceeding with wallet balance update.`);
+                  const { data: walletData, error: walletError } = await adminClient
+                    .from("wallets")
+                    .select("balance") // Only select balance
+                    .eq("user_id", userId)
+                    .single();
+                    
+                  if (walletError && walletError.code !== 'PGRST116') {
+                      console.error(`[${requestId}] Error fetching wallet for update:`, walletError);
+                      throw walletError; // Rethrow if not 'not found'
+                  }
+
+                  const currentBalance = walletData?.balance || 0;
+                  const newBalance = currentBalance + amountInNaira;
+
+                  console.log(`[${requestId}] Updating wallet balance:`, {
+                    currentBalance: currentBalance,
+                    amountToAdd: amountInNaira,
+                    newBalance: newBalance
+                  });
+
+                  // Use upsert for wallet - creates if not exists, updates if exists
+                  const { error: upsertWalletError } = await adminClient
+                      .from("wallets")
+                      .upsert({ 
+                          user_id: userId,
+                          balance: newBalance, 
+                          currency: 'NGN', // Assuming NGN
+                          last_updated: new Date().toISOString()
+                      }, { onConflict: 'user_id' }); // Specify conflict column
+                      
+                  if (upsertWalletError) {
+                    console.error(`[${requestId}] Error upserting wallet:`, upsertWalletError);
+                    // IMPORTANT: Consider how to handle this failure. Revert transaction status?
+                    throw upsertWalletError;
+                  } else {
+                    console.log(`[${requestId}] Wallet balance upserted successfully.`);
+                  }
+              }
           } else {
-            console.log(`[${requestId}] New transaction marked as wallet_updated = true`);
+              console.log(`[${requestId}] Manual Fallback: Transaction status already 'completed' or wallet_updated=true, skipping balance update.`);
           }
+          // --- End Refined Fallback Logic ---
         } catch (error) {
           console.error(`[${requestId}] Error in manual wallet update for new transaction:`, error);
           throw error;
@@ -505,13 +547,19 @@ export async function GET(request: NextRequest) {
           .eq("user_id", userId)
           .single();
         if (finalWalletData) {
+          const addedAmount = finalWalletData.balance - initialWalletBalance;
           console.log(`[${requestId}] WALLET BALANCE CHECK: Final balance =`, finalWalletData.balance);
           console.log(`[${requestId}] WALLET BALANCE CHECK: Last updated =`, finalWalletData.last_updated);
-          console.log(`[${requestId}] WALLET BALANCE CHECK: Difference =`, finalWalletData.balance - initialWalletBalance);
+          console.log(`[${requestId}] WALLET BALANCE CHECK: Calculated Difference =`, addedAmount);
+
+          // Debugging for amount comparison
+          console.log(`[${requestId}] WALLET DEBUG: Amount added = ${addedAmount}, Expected amount = ${amountInNaira}`);
           
-          if (finalWalletData.balance - initialWalletBalance !== amountInNaira) {
-            console.error(`[${requestId}] WALLET BALANCE MISMATCH: Expected to add ${amountInNaira} but added ${finalWalletData.balance - initialWalletBalance}`);
+          if (Math.abs(addedAmount - amountInNaira) > 0.01) { // Use tolerance for float comparison
+            console.error(`[${requestId}] WALLET BALANCE MISMATCH: Expected to add ${amountInNaira} but added ${addedAmount}`);
           }
+        } else {
+          console.log(`[${requestId}] Could not check final wallet balance.`);
         }
       } catch (error) {
         console.log(`[${requestId}] Error checking final wallet balance for new transaction:`, error);
@@ -522,20 +570,62 @@ export async function GET(request: NextRequest) {
     const sessionToken = Buffer.from(`${userId}:${Date.now()}`).toString('base64');
     console.log(`[${requestId}] Generated session token for redirect`);
     
-    // Create redirect URL with success message
-    const redirectUrl = new URL("/wallet", request.url);
+    // --- Construct Absolute Redirect URL --- 
+    const publicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (!publicAppUrl) {
+        console.error(`[${requestId}] ERROR: NEXT_PUBLIC_APP_URL is not set. Cannot construct absolute redirect URL.`);
+        // Fallback to relative redirect, which might fail as observed
+        return NextResponse.redirect(new URL("/wallet?status=failed&message=Configuration Error", request.url), { status: 303 });
+    }
+
+    // Create redirect URL with success message using the public app URL as the base
+    const redirectUrl = new URL("/wallet", publicAppUrl);
     redirectUrl.searchParams.set("status", "success");
     redirectUrl.searchParams.set("message", "Payment successful");
-    redirectUrl.searchParams.set("session", sessionToken);
-    redirectUrl.searchParams.set("amount", amountInNaira.toString());
-    console.log(`[${requestId}] Redirect URL:`, redirectUrl.toString());
+    // Append other params if needed (like amount, session token previously added)
+    // redirectUrl.searchParams.set("session", sessionToken);
+    // redirectUrl.searchParams.set("amount", amountInNaira.toString());
+    console.log(`[${requestId}] Constructed Absolute Redirect URL:`, redirectUrl.toString());
+    // --- End Absolute Redirect URL --- 
 
-    // Create response with redirect
-    const response = NextResponse.redirect(redirectUrl, { status: 303 });
+    // Create response with the absolute redirect URL
+    const response = NextResponse.redirect(redirectUrl.toString(), { status: 303 }); // Use .toString()
     console.log(`[${requestId}] Created redirect response`);
 
     // Set cookie max age to 1 hour
     const cookieMaxAge = 60 * 60; // 1 hour in seconds
+
+    // --- Explicitly set cookie domain --- 
+    let appDomain: string | undefined = undefined;
+    try {
+      // Extract hostname (domain) from the configured app URL
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+      if (appUrl) {
+          const parsedUrl = new URL(appUrl);
+          // Use hostname, removing port if present (cookies apply to hostname)
+          appDomain = parsedUrl.hostname;
+          // Handle localhost specifically - browsers often treat localhost differently
+          if (appDomain === 'localhost') {
+            appDomain = undefined; // Let browser handle localhost default
+          }
+          console.log(`[${requestId}] Using cookie domain: ${appDomain || 'default (localhost)'}`);
+      } else {
+          console.warn(`[${requestId}] NEXT_PUBLIC_APP_URL not set, using default cookie domain`);
+      }
+    } catch (e) {
+        console.error(`[${requestId}] Error parsing NEXT_PUBLIC_APP_URL for cookie domain:`, e);
+    }
+
+    // Function to create cookie options with explicit domain (if applicable)
+    const getCookieOptions = (maxAge: number, httpOnly = true) => ({
+        httpOnly: httpOnly,
+        path: '/',
+        maxAge: maxAge,
+        sameSite: 'lax' as const,
+        secure: process.env.NODE_ENV === 'production' || request.url.startsWith('https'), // Secure if prod or request is HTTPS (like ngrok)
+        domain: appDomain // Set domain if derived, otherwise undefined lets browser default
+    });
+    // --- End Explicit cookie domain logic --- 
 
     // Preserve existing auth cookie if present
     const existingAuthCookie = request.cookies.get('sb-rtbqpprntygrgxopxoei-auth-token');
@@ -543,53 +633,37 @@ export async function GET(request: NextRequest) {
       response.cookies.set({
         name: 'sb-rtbqpprntygrgxopxoei-auth-token',
         value: existingAuthCookie.value,
-        httpOnly: true,
-        path: '/',
-        maxAge: cookieMaxAge,
-        sameSite: 'lax'
+        ...getCookieOptions(cookieMaxAge, true) // Use helper, keep httpOnly true for auth token
       });
-      console.log(`[${requestId}] Preserved existing auth cookie`);
+      console.log(`[${requestId}] Attempted to preserve existing auth cookie with explicit domain settings`);
     }
 
-    // Set recovery cookies with improved security
+    // Set recovery cookies with improved security & explicit domain
     response.cookies.set({
       name: 'paystack_session',
       value: sessionToken,
-      httpOnly: true,
-      path: '/',
-      maxAge: cookieMaxAge,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
+      ...getCookieOptions(cookieMaxAge, true) // Keep httpOnly true
     });
 
     response.cookies.set({
       name: 'auth_recovery',
       value: 'true',
-      path: '/',
-      maxAge: cookieMaxAge,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
+      ...getCookieOptions(cookieMaxAge, false) // httpOnly: false if client script needs it
     });
 
     response.cookies.set({
       name: 'recovery_user_id',
       value: userId,
-      path: '/',
-      maxAge: cookieMaxAge,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
+      ...getCookieOptions(cookieMaxAge, false) // httpOnly: false if client script needs it
     });
 
     response.cookies.set({
       name: 'session_timestamp',
       value: Date.now().toString(),
-      path: '/',
-      maxAge: cookieMaxAge,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production'
+      ...getCookieOptions(cookieMaxAge, false) // httpOnly: false if client script needs it
     });
 
-    console.log(`[${requestId}] Set recovery cookies`);
+    console.log(`[${requestId}] Set recovery cookies with explicit domain settings`);
     console.log(`[${requestId}] Payment verification flow completed successfully`);
     console.log("=========================");
 

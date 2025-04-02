@@ -27,6 +27,18 @@ function debugLog(...args: any[]) {
  * Use this in client components (React components with 'use client')
  */
 export function createClient() {
+  // Add Debugging
+  console.log("DEBUG: Attempting to create browser Supabase client with URL:", supabaseUrl);
+  if (supabaseUrl) {
+    try {
+      console.log("DEBUG: Project ref from URL:", supabaseUrl.split('https://')[1]?.split('.')[0]);
+    } catch (e) {
+      console.error("DEBUG: Error parsing Supabase URL for project ref", e);
+    }
+  } else {
+    console.warn("DEBUG: supabaseUrl is not defined");
+  }
+
   if (clientInstance) return clientInstance
   
   debugLog('Creating new browser client instance')
@@ -74,6 +86,16 @@ export async function persistSession() {
  */
 export async function recoverSession() {
   debugLog('Attempting to recover session...')
+
+  // Add debugging for available auth cookies
+  try {
+    const allCookies = document.cookie.split(';').map(c => c.trim());
+    const authCookies = allCookies.filter(c => c.includes('-auth-token='));
+    debugLog('Found auth cookies:', authCookies);
+  } catch(e) {
+    debugLog('Error reading cookies for debug:', e);
+  }
+
   const client = createClient()
   if (!client) {
     debugLog('No client available for recoverSession')
