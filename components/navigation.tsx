@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Grid, Heart, Bell, User } from "lucide-react"
+import { Grid, Heart, Bell, User, Wallet } from "lucide-react"
 import NotificationDropdown from "@/components/notifications/notification-dropdown"
 import { useState } from "react"
 
@@ -41,6 +41,14 @@ export default function Navigation() {
           >
             <Heart className="w-6 h-6" />
             <span className="text-sm mt-1">Services</span>
+          </Link>
+
+          <Link
+            href="/wallet"
+            className={`flex flex-col items-center ${pathname?.includes("/wallet") ? "text-blue-600" : "text-slate-500"}`}
+          >
+            <Wallet className="w-6 h-6" />
+            <span className="text-sm mt-1">Wallet</span>
           </Link>
 
           <Link
