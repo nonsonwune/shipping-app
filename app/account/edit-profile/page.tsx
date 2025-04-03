@@ -2,31 +2,148 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Camera, Mail, Phone, User } from "lucide-react"
+import { ArrowLeft, Camera, Mail, Phone, User, AtSign } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { createBrowserClient, safeQuerySingle } from "@/lib/supabase"
+import type { Database } from "@/types/supabase"
+
+type UserProfile = Database['public']['Tables']['profiles']['Row']
 
 export default function EditProfilePage() {
-  const [profile, setProfile] = useState({
-    name: "Chukwunonso Nwune",
-    email: "chuqunonso@gmail.com",
-    phone: "+234 812 345 6789",
+  const router = useRouter()
+  const supabase = createBrowserClient()
+  const [profile, setProfile] = useState<Partial<UserProfile> & { profilePicture?: string }>({
+    first_name: "",
+    last_name: "",
+    username: "",
+    email: "",
+    phone: "",
     profilePicture: "/placeholder.svg?height=100&width=100",
   })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let isMounted = true
+    async function getProfile() {
+      setLoading(true)
+      setError(null)
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+
+        if (sessionError) throw sessionError
+        if (!session) {
+          router.push("/auth/sign-in")
+          return
+        }
+
+        setUserId(session.user.id)
+
+        const { data, error: profileError } = await safeQuerySingle(
+          supabase,
+          "profiles",
+          "first_name, last_name, username, email, phone",
+          { id: session.user.id }
+        )
+
+        if (profileError) {
+          if (profileError.code === 'PGRST116') {
+            console.error("Edit Profile page: Possible RLS issue preventing SELECT or table/column doesn't exist?")
+          }
+          throw profileError
+        }
+
+        if (isMounted && data) {
+          setProfile(prev => ({
+            ...prev,
+            first_name: data.first_name ?? "",
+            last_name: data.last_name ?? "",
+            username: data.username ?? "",
+            email: data.email ?? "",
+            phone: data.phone ?? "",
+          }))
+        }
+      } catch (err: any) {
+        console.error("Edit Profile page: Error loading profile CATCH block:", err)
+        if (isMounted) setError(err.message || "Failed to load profile.")
+      } finally {
+        if (isMounted) setLoading(false)
+      }
+    }
+
+    getProfile()
+    
+    return () => { isMounted = false }
+
+  }, [router, supabase])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setProfile((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Save profile changes
-    console.log("Profile updated:", profile)
+    if (!userId) {
+      setError("User not identified. Cannot save.")
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+    setSuccess(null)
+
+    const updates: Partial<UserProfile> = {
+      first_name: profile.first_name || null,
+      last_name: profile.last_name || null,
+      username: profile.username || null,
+      email: profile.email || null,
+      phone: profile.phone || null,
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update(updates)
+        .eq("id", userId)
+        .select()
+
+      if (updateError) {
+        if (updateError.code === '42501') {
+          console.error("Edit Profile page: UPDATE RLS permission denied? Code: 42501")
+        }
+        throw updateError
+      }
+
+      setSuccess("Profile updated successfully!")
+
+    } catch (err: any) {
+      console.error("Edit Profile page: Error updating profile CATCH block:", err)
+      setError(err.message || "Failed to save profile.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+      </div>
+    )
+  }
+
+  if (error && !saving) {
+      return <div className="p-4 text-red-600 text-center">{error}</div>;
   }
 
   return (
@@ -53,11 +170,13 @@ export default function EditProfilePage() {
             <button
               type="button"
               className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full shadow-md"
+              title="Change profile picture (feature coming soon)"
+              disabled
             >
               <Camera className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Tap to change profile picture</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Tap to change profile picture (coming soon)</p>
         </div>
 
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -66,18 +185,54 @@ export default function EditProfilePage() {
           </div>
 
           <div className="p-4 space-y-4">
+            {error && saving && <p className="text-sm text-red-600">{error}</p>}
+            {success && <p className="text-sm text-green-600">{success}</p>}
+
             <div className="space-y-2">
-              <Label htmlFor="name" className="flex items-center gap-2 text-black dark:text-white">
+              <Label htmlFor="first_name" className="flex items-center gap-2 text-black dark:text-white">
                 <User className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                Full Name
+                First Name
               </Label>
               <Input
-                id="name"
-                name="name"
-                value={profile.name}
+                id="first_name"
+                name="first_name"
+                value={profile.first_name || ''}
                 onChange={handleChange}
-                placeholder="Enter your full name"
+                placeholder="Enter your first name"
                 className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                disabled={saving}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="last_name" className="flex items-center gap-2 text-black dark:text-white">
+                <User className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                Last Name
+              </Label>
+              <Input
+                id="last_name"
+                name="last_name"
+                value={profile.last_name || ''}
+                onChange={handleChange}
+                placeholder="Enter your last name"
+                className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                disabled={saving}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="username" className="flex items-center gap-2 text-black dark:text-white">
+                <AtSign className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                Username
+              </Label>
+              <Input
+                id="username"
+                name="username"
+                value={profile.username || ''}
+                onChange={handleChange}
+                placeholder="Enter your username"
+                className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                disabled={saving}
               />
             </div>
 
@@ -90,10 +245,11 @@ export default function EditProfilePage() {
                 id="email"
                 name="email"
                 type="email"
-                value={profile.email}
+                value={profile.email || ''}
                 onChange={handleChange}
                 placeholder="Enter your email address"
                 className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                disabled={saving}
               />
             </div>
 
@@ -105,10 +261,11 @@ export default function EditProfilePage() {
               <Input
                 id="phone"
                 name="phone"
-                value={profile.phone}
+                value={profile.phone || ''}
                 onChange={handleChange}
                 placeholder="Enter your phone number"
                 className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                disabled={saving}
               />
             </div>
           </div>
@@ -136,8 +293,8 @@ export default function EditProfilePage() {
               Cancel
             </Button>
           </Link>
-          <Button type="submit" className="w-1/2 bg-blue-600 text-white">
-            Save Changes
+          <Button type="submit" className="w-1/2 bg-blue-600 text-white" disabled={saving || loading}>
+            {saving ? "Saving..." : "Save Changes"}
           </Button>
         </div>
       </form>

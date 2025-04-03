@@ -37,6 +37,11 @@ export async function safeQuerySingle(
   selectQuery: string | { select: string, eq: string, value: any },
   conditions?: Record<string, any>
 ) {
+  // --- DEBUG START ---
+  // console.log(`safeQuerySingle: Called for table '${table}', select '${JSON.stringify(selectQuery)}', conditions '${JSON.stringify(conditions)}'`);
+  // --- DEBUG END ---
+  let returnValue: any = { data: undefined, error: undefined }; // Default structure to avoid destructuring errors
+
   try {
     // Handle different parameter formats
     let select = typeof selectQuery === 'string' ? selectQuery : selectQuery.select;
@@ -44,53 +49,83 @@ export async function safeQuerySingle(
     let whereValue = typeof selectQuery === 'object' ? selectQuery.value : null;
     let whereConditions = conditions || (whereField && whereValue ? { [whereField]: whereValue } : {});
     
-    // First check if the table exists with a minimal query
-    const { error: tableCheckError } = await supabase
-      .from(table)
-      .select('id')
-      .limit(1)
+    // --- DEBUG START ---
+    // console.log(`safeQuerySingle: Parsed - select='${select}', conditions='${JSON.stringify(whereConditions)}'`);
+    // --- DEBUG END ---
     
-    if (tableCheckError) {
-      console.error(`Table check error for ${table}:`, tableCheckError)
-      return null
-    }
+    // First check if the table exists with a minimal query (optional, can be removed if confident table exists)
+    // const { error: tableCheckError } = await supabase
+    //   .from(table)
+    //   .select('id')
+    //   .limit(1)
+    // 
+    // if (tableCheckError) {
+    //   console.error(`safeQuerySingle: Table check error for ${table}:`, tableCheckError)
+    //   returnValue = { data: null, error: tableCheckError }; // Return structured error
+    //   console.log("safeQuerySingle: Returning early due to table check error", returnValue);
+    //   return returnValue;
+    // }
     
     // Now perform the actual query with the specified column
+    // --- DEBUG START ---
+    // console.log(`safeQuerySingle: Executing main query: from('${table}').select('${select}').match(${JSON.stringify(whereConditions)}).maybeSingle()`);
+    // --- DEBUG END ---
     const { data, error } = await supabase
       .from(table)
       .select(select)
       .match(whereConditions)
-      .single()
+      .maybeSingle() // Use maybeSingle() instead of single()
+    
+    // --- DEBUG START ---
+    // console.log(`safeQuerySingle: Main query result - data:`, data);
+    // console.log(`safeQuerySingle: Main query result - error:`, error);
+    // --- DEBUG END ---
     
     if (error) {
-      // Handle 406 Not Acceptable error specifically
-      if (error.code === '406') {
-        console.warn(`406 error for ${table} query, retrying with '*'`)
+      // Handle 406 Not Acceptable error specifically (Might not be needed with maybeSingle, but kept for now)
+      if (error.code === '406' || error.message.includes('failed to parse select parameter')) { // Check common 406 messages
+        // --- DEBUG START ---
+        // console.warn(`safeQuerySingle: 406 error or similar for ${table} query, retrying with '*'`) // Log the 406 warning
+        // console.log(`safeQuerySingle: Executing retry query: from('${table}').select('*').match(${JSON.stringify(whereConditions)}).maybeSingle()`);
+        // --- DEBUG END ---
         
-        // Retry with select('*') which usually works
-        const { data: fullData, error: retryError } = await supabase
+        // Retry with select('*') which might work if specific select was issue
+        const { data: retryData, error: retryError } = await supabase
           .from(table)
           .select('*')
           .match(whereConditions)
-          .single()
+          .maybeSingle() // Use maybeSingle() here too
+        
+        // --- DEBUG START ---
+        // console.log(`safeQuerySingle: Retry query result - retryData:`, retryData);
+        // console.log(`safeQuerySingle: Retry query result - retryError:`, retryError);
+        // --- DEBUG END ---
         
         if (retryError) {
-          console.error(`Retry error for ${table}:`, retryError)
-          return null
+          console.error(`safeQuerySingle: Retry error for ${table}:`, retryError)
+          returnValue = { data: null, error: retryError }; // Assign structured error
+        } else {
+          returnValue = { data: retryData, error: null }; // Assign retry data
         }
-        
-        return fullData
+      } else {
+        // Handle other errors
+        console.error(`safeQuerySingle: Query error for ${table}:`, error)
+         returnValue = { data: null, error: error }; // Assign structured error
       }
-      
-      console.error(`Query error for ${table}:`, error)
-      return null
+    } else {
+      // Success case (no error from main query)
+      returnValue = { data: data, error: null }; // Assign success data
     }
-    
-    return data
+
   } catch (e) {
-    console.error(`Unexpected error querying ${table}:`, e)
-    return null
+    console.error(`safeQuerySingle: Unexpected error querying ${table}:`, e)
+     returnValue = { data: null, error: e as Error }; // Assign caught error
   }
+
+  // --- DEBUG START ---
+  // console.log("safeQuerySingle: Final return value:", returnValue);
+  // --- DEBUG END ---
+  return returnValue;
 }
 
 // BACKWARD COMPATIBILITY EXPORTS

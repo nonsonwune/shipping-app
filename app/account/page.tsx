@@ -27,42 +27,49 @@ export default function AccountPage() {
   const router = useRouter()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [supabase, setSupabase] = useState(createBrowserClient())
 
   useEffect(() => {
     async function getProfile() {
+      setLoading(true);
       try {
-        const supabase = createBrowserClient();
         const {
           data: { session },
+          error: sessionError,
         } = await supabase.auth.getSession()
 
+        if (sessionError) throw sessionError;
         if (!session) {
           router.push("/auth/sign-in")
           return
         }
 
-        // Use safeQuerySingle to handle potential 406 errors gracefully
+        const currentUserId = session.user.id;
         const { data, error } = await safeQuerySingle(
           supabase,
           "profiles",
-          "*",
-          { id: session.user.id }
+          "first_name, last_name, username",
+          { id: currentUserId }
         )
 
         if (error) {
+          if (error.code === 'PGRST116') {
+             console.error("Account page: Possible RLS issue preventing SELECT or table/column doesn't exist?");
+          }
           throw error
         }
 
         setProfile(data)
+
       } catch (error) {
-        console.error("Error loading profile:", error)
+        console.error("Account page: Error loading profile in CATCH:", error)
       } finally {
         setLoading(false)
       }
     }
 
     getProfile()
-  }, [router])
+  }, [router, supabase]);
 
   const handleSignOut = async () => {
     const supabase = createBrowserClient();
