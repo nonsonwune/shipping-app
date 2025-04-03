@@ -70,9 +70,20 @@ export default function AdminDashboard() {
         const { count: usersCount, error: usersError } = await supabase
           .from('profiles')
           .select('*', { count: 'exact', head: true })
+          // This counts all users in the profiles table, regardless of account_type
           
         if (usersError) {
           console.error("Error fetching users count:", usersError)
+        }
+        
+        // Fetch active users (with account_type set)
+        const { count: activeUsersCount, error: activeUsersError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .not('account_type', 'is', null)
+          
+        if (activeUsersError) {
+          console.error("Error fetching active users count:", activeUsersError)
         }
         
         // Fetch total revenue
@@ -131,7 +142,7 @@ export default function AdminDashboard() {
           totalShipments: shipmentsCount || 0,
           pendingShipments: pendingCount || 0,
           completedShipments: completedCount || 0,
-          totalUsers: usersCount || 0,
+          totalUsers: activeUsersCount || 0, // Only count users with account_type set
           totalRevenue,
           recentShipments: recentShipments || [],
         })
@@ -193,7 +204,7 @@ export default function AdminDashboard() {
           <CardContent>
             <div className="text-2xl font-bold">{stats.totalUsers}</div>
             <p className="text-xs text-muted-foreground">
-              Active shipping platform users
+              Active users with account type
             </p>
           </CardContent>
         </Card>
