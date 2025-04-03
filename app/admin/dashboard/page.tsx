@@ -72,6 +72,8 @@ export default function AdminDashboard() {
           .select('*', { count: 'exact', head: true })
           // This counts all users in the profiles table, regardless of account_type
           
+        console.log("DEBUG - All users count:", usersCount);
+          
         if (usersError) {
           console.error("Error fetching users count:", usersError)
         }
@@ -81,6 +83,16 @@ export default function AdminDashboard() {
           .from('profiles')
           .select('*', { count: 'exact', head: true })
           .not('account_type', 'is', null)
+          
+        console.log("DEBUG - Active users count (account_type not null):", activeUsersCount);
+        
+        // Debug query - show users with account_type
+        const { data: usersWithAccountType, error: debugError } = await supabase
+          .from('profiles')
+          .select('id, email, account_type')
+          .not('account_type', 'is', null)
+          
+        console.log("DEBUG - Users with account_type:", usersWithAccountType);
           
         if (activeUsersError) {
           console.error("Error fetching active users count:", activeUsersError)
@@ -146,6 +158,15 @@ export default function AdminDashboard() {
           totalRevenue,
           recentShipments: recentShipments || [],
         })
+        
+        console.log("DEBUG - Final stats object:", {
+          totalShipments: shipmentsCount || 0,
+          pendingShipments: pendingCount || 0,
+          completedShipments: completedCount || 0,
+          totalUsers: activeUsersCount || 0,
+          totalRevenue,
+          recentShipments: recentShipments?.length || 0,
+        });
       } catch (error) {
         console.error("Dashboard data fetch error:", error)
       } finally {
