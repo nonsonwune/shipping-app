@@ -82,17 +82,17 @@ export default function AdminDashboard() {
         const { count: activeUsersCount, error: activeUsersError } = await supabase
           .from('profiles')
           .select('*', { count: 'exact', head: true })
-          .not('account_type', 'is', null)
+          .or('account_type.eq.customer,account_type.eq.admin,account_type.eq.individual,account_type.eq.corporate,account_type.eq.business')
           
-        console.log("DEBUG - Active users count (account_type not null):", activeUsersCount);
+        console.log("DEBUG - Active users count (specific account types):", activeUsersCount);
         
         // Debug query - show users with account_type
         const { data: usersWithAccountType, error: debugError } = await supabase
           .from('profiles')
           .select('id, email, account_type')
-          .not('account_type', 'is', null)
+          .or('account_type.eq.customer,account_type.eq.admin,account_type.eq.individual,account_type.eq.corporate,account_type.eq.business')
           
-        console.log("DEBUG - Users with account_type:", usersWithAccountType);
+        console.log("DEBUG - Users with specific account_type:", usersWithAccountType);
           
         if (activeUsersError) {
           console.error("Error fetching active users count:", activeUsersError)
