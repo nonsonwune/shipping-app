@@ -15,8 +15,8 @@ export default function SettingsLayout({
   const [activeTab, setActiveTab] = useState<string>("general")
   
   useEffect(() => {
-    // Determine active tab based on pathname
-    if (pathname.includes("/profile")) {
+    // Determine active tab based on pathname, handling potential null
+    if (pathname?.includes("/profile")) {
       setActiveTab("profile")
     } else {
       setActiveTab("general")
