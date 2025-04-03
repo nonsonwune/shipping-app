@@ -510,20 +510,23 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
             </Link>
           </div>
 
+          {/* --- Apply responsive layout WITHIN the conditional rendering --- */}
           {type === "import" ? (
-            <>
-              <div className="bg-slate-100 rounded-xl overflow-hidden mb-6">
+            // ADD WRAPPER DIV for Import services
+            <div className="flex flex-col md:flex-row gap-6 mb-6">
+              {/* Import Sea Card - Add responsive width & Restore Original Content */}
+              <div className="bg-slate-100 rounded-xl overflow-hidden w-full md:w-1/2">
                 <div className="p-4">
                   <div className="aspect-[3/2] relative">
-                    <img
-                      src="/images/sea-import.png"
-                      alt="Import by Sea"
-                      className="w-full h-full object-cover"
-                    />
+                     <img
+                       src="/images/sea-import.png"
+                       alt="Import by Sea"
+                       className="w-full h-full object-cover rounded-md"
+                     />
                   </div>
                   <div className="bg-white p-4 rounded-xl mt-4">
-                    <h2 className="text-2xl font-bold mb-2">Import by Sea</h2>
-                    <p className="text-gray-600 mb-4">
+                    <h2 className="text-xl font-bold mb-2">Import by Sea</h2>
+                    <p className="text-gray-600 mb-4 text-sm">
                       Ship heavy and oversized items via sea freight and receive your items in 8-12 weeks.
                     </p>
                     <div className="flex gap-3">
@@ -540,92 +543,96 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
                 </div>
               </div>
 
-              <div className="bg-slate-100 rounded-xl overflow-hidden mb-6">
-                <div className="p-4">
-                  <div className="aspect-[3/2] relative">
-                    <img
-                      src="/images/dashboard.png"
-                      alt="Import by Air"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="bg-white p-4 rounded-xl mt-4">
-                    <h2 className="text-2xl font-bold mb-2">Import by Air</h2>
-                    <p className="text-gray-600 mb-4">
-                      Fast delivery for time-sensitive shipments. Get your items within 7-14 days.
-                    </p>
-                    <div className="flex gap-3">
-                      <Link href="/services/import-air/features" className="w-full">
-                        <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
-                          View Features
-                        </Button>
-                      </Link>
-                      <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("import-air")}>
-                        Ship Now
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+              {/* Import Air Card - Add responsive width & Restore Original Content */}
+              <div className="bg-slate-100 rounded-xl overflow-hidden w-full md:w-1/2">
+                 <div className="p-4">
+                   <div className="aspect-[3/2] relative">
+                     <img
+                       src="/images/dashboard.png"
+                       alt="Import by Air"
+                       className="w-full h-full object-cover rounded-md"
+                     />
+                   </div>
+                   <div className="bg-white p-4 rounded-xl mt-4">
+                     <h2 className="text-xl font-bold mb-2">Import by Air</h2>
+                     <p className="text-gray-600 mb-4 text-sm">
+                       Fast delivery for time-sensitive shipments. Get your items within 7-14 days.
+                     </p>
+                     <div className="flex gap-3">
+                       <Link href="/services/import-air/features" className="w-full">
+                         <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
+                           View Features
+                         </Button>
+                       </Link>
+                       <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("import-air")}>
+                         Ship Now
+                       </Button>
+                     </div>
+                   </div>
+                 </div>
               </div>
-            </>
+            </div> // Close Import flex container
           ) : (
-            <>
-              <div className="bg-slate-100 rounded-xl overflow-hidden mb-6">
-                <div className="p-4">
-                  <div className="aspect-[3/2] relative">
-                    <img
-                      src="/images/export-sea.png"
-                      alt="Export by Sea"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="bg-white p-4 rounded-xl mt-4">
-                    <h2 className="text-2xl font-bold mb-2">Export by Sea</h2>
-                    <p className="text-gray-600 mb-4">
-                      Send heavy and oversized items via sea freight, delivered in 8-12 weeks.
-                    </p>
-                    <div className="flex gap-3">
-                      <Link href="/services/export-sea/features" className="w-full">
-                        <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
-                          View Features
-                        </Button>
-                      </Link>
-                      <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("export-sea")}>
-                        Ship Now
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+            // ADD WRAPPER DIV for Export services
+            <div className="flex flex-col md:flex-row gap-6 mb-6">
+              {/* Export Sea Card - Add responsive width & Restore Original Content */}
+              <div className="bg-slate-100 rounded-xl overflow-hidden w-full md:w-1/2">
+                 <div className="p-4">
+                   <div className="aspect-[3/2] relative">
+                     <img
+                       src="/images/export-sea.png"
+                       alt="Export by Sea"
+                       className="w-full h-full object-cover rounded-md"
+                     />
+                   </div>
+                   <div className="bg-white p-4 rounded-xl mt-4">
+                     <h2 className="text-xl font-bold mb-2">Export by Sea</h2>
+                     <p className="text-gray-600 mb-4 text-sm">
+                       Send heavy and oversized items via sea freight, delivered in 8-12 weeks.
+                     </p>
+                     <div className="flex gap-3">
+                       <Link href="/services/export-sea/features" className="w-full">
+                         <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
+                           View Features
+                         </Button>
+                       </Link>
+                       <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("export-sea")}>
+                         Ship Now
+                       </Button>
+                     </div>
+                   </div>
+                 </div>
               </div>
 
-              <div className="bg-slate-100 rounded-xl overflow-hidden mb-6">
-                <div className="p-4">
-                  <div className="aspect-[3/2] relative">
-                    <img
-                      src="/images/services.png"
-                      alt="Document Export"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="bg-white p-4 rounded-xl mt-4">
-                    <h2 className="text-2xl font-bold mb-2">Document Export</h2>
-                    <p className="text-gray-600 mb-4">
-                      Send important documents internationally with tracking and guaranteed delivery.
-                    </p>
-                    <div className="flex gap-3">
-                      <Link href="/services/export-documents/features" className="w-full">
-                        <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
-                          View Features
-                        </Button>
-                      </Link>
-                      <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("export-documents")}>
-                        Ship Now
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+              {/* Document Export Card - Add responsive width & Restore Original Content */}
+              <div className="bg-slate-100 rounded-xl overflow-hidden w-full md:w-1/2">
+                 <div className="p-4">
+                   <div className="aspect-[3/2] relative">
+                     <img
+                       src="/images/services.png"
+                       alt="Document Export"
+                       className="w-full h-full object-cover rounded-md"
+                     />
+                   </div>
+                   <div className="bg-white p-4 rounded-xl mt-4">
+                     <h2 className="text-xl font-bold mb-2">Document Export</h2>
+                     <p className="text-gray-600 mb-4 text-sm">
+                       Send important documents internationally with tracking and guaranteed delivery.
+                     </p>
+                     <div className="flex gap-3">
+                       <Link href="/services/export-documents/features" className="w-full">
+                         <Button variant="outline" className="w-full border-blue-600 text-blue-600 hover:bg-blue-50">
+                           View Features
+                         </Button>
+                       </Link>
+                       <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => handleServiceSelect("export-documents")}>
+                         Ship Now
+                       </Button>
+                     </div>
+                   </div>
+                 </div>
               </div>
-            </>
+            </div> // Close Export flex container
           )}
         </div>
       ) : (
