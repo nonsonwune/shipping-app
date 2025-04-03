@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { AdminDateDisplay } from "@/components/admin/AdminDateDisplay"
 import { Database } from "@/types/supabase"
+import Link from "next/link"
 
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
@@ -291,7 +292,9 @@ export default function AdminDashboard() {
               </div>
             )}
             <div className="flex justify-end">
-              <Button variant="outline" size="sm">View All Shipments</Button>
+              <Link href="/admin/shipments">
+                <Button variant="outline" size="sm">View All Shipments</Button>
+              </Link>
             </div>
           </div>
         </CardContent>
