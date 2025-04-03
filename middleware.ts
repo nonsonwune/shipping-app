@@ -47,10 +47,9 @@ const EXCLUDED_PATHS = [
 ];
 
 // Payment verification routes that should be exempt from auth checks
-const PAYMENT_ROUTES = [
+const PAYMENT_API_ROUTES = [
   '/api/payment/verify',
-  '/api/auth/session-recovery', 
-  '/wallet' 
+  '/api/auth/session-recovery'
 ];
 
 /**
@@ -74,97 +73,119 @@ export async function middleware(req: NextRequest) {
   // Get the path requested
   const { pathname } = req.nextUrl;
   
-  // Skip middleware for API routes completely
+  // Initialize the response object. This may be modified by Supabase.
+  const res = NextResponse.next();
+  const supabase = createMiddlewareClient({ req, res });
+  
+  // --- Early Exits (Before Session Check) ---
+  
+  // Skip middleware for most API routes
   if (pathname.startsWith('/api/')) {
-    // Except for the session recovery API which should be allowed
-    if (pathname.startsWith('/api/auth/session-recovery')) {
-      console.log("Session recovery API detected, allowing request");
-      return NextResponse.next();
-    }
-    console.log("API route detected, skipping auth middleware");
-    return NextResponse.next();
+      // Allow specific API routes needed pre-authentication
+      const isAllowedApiRoute = PAYMENT_API_ROUTES.some(p => pathname.startsWith(p));
+      if (!isAllowedApiRoute) {
+          console.log("API route detected, skipping auth middleware");
+          return NextResponse.next(); // Use fresh response for API routes not needing cookies
+      }
+      console.log(`Allowed API route ${pathname}, proceeding...`);
+      // For allowed API routes like session recovery, let Supabase handle session/cookies below
   }
   
-  // Skip middleware for excluded paths
-  const isExcludedPath = EXCLUDED_PATHS.some(path => pathname.includes(path));
+  // Skip middleware for static assets and specific file extensions
+  // Updated to use endsWith for files and startsWith for /_next/
+  const isExcludedPath = EXCLUDED_PATHS.some(path =>
+    path.startsWith('/') ? pathname.startsWith(path) : pathname.endsWith(path)
+  );
   if (isExcludedPath) {
     console.log("Excluded path detected, skipping auth middleware");
-    return NextResponse.next();
+    return NextResponse.next(); // Use fresh response, no cookie handling needed
   }
   
-  // Special handling for payment verification redirects
+  // Special handling for /wallet page during payment verification redirects
   const url = new URL(req.url);
-  const hasPaymentParams = url.searchParams.has('status') || 
-                         url.searchParams.has('session') || 
+  const hasPaymentParams = url.searchParams.has('status') ||
+                         url.searchParams.has('session') ||
                          url.searchParams.has('reference') ||
                          url.searchParams.has('trxref');
   
   if (pathname === '/wallet' && hasPaymentParams) {
-    console.log('Payment verification redirect detected, checking session recovery');
-    
-    // Check for recovery cookies
-    const authRecoveryCookie = req.cookies.get('auth_recovery');
-    const paystackSessionCookie = req.cookies.get('paystack_session');
-    const sessionTimestampCookie = req.cookies.get('session_timestamp');
-    
-    // Check if session is still valid (within 1 hour)
-    const isValidSession = sessionTimestampCookie && 
-      (Date.now() - parseInt(sessionTimestampCookie.value)) < 60 * 60 * 1000;
-    
-    if ((authRecoveryCookie?.value === 'true' || paystackSessionCookie) && isValidSession) {
-      console.log('Valid session recovery cookies detected, allowing request');
-      return NextResponse.next();
-    }
-    
-    // If session is expired, clear recovery cookies
-    if (sessionTimestampCookie && !isValidSession) {
-      console.log('Session expired, clearing recovery cookies');
-      const response = NextResponse.next();
-      response.cookies.set({ name: 'auth_recovery', value: '', maxAge: 0, path: '/' });
-      response.cookies.set({ name: 'recovery_user_id', value: '', maxAge: 0, path: '/' });
-      response.cookies.set({ name: 'paystack_session', value: '', maxAge: 0, path: '/' });
-      response.cookies.set({ name: 'session_timestamp', value: '', maxAge: 0, path: '/' });
-      return response;
-    }
+      console.log('Payment verification redirect detected for /wallet');
+      // Check recovery cookies (keep existing logic)
+      const authRecoveryCookie = req.cookies.get('auth_recovery');
+      const paystackSessionCookie = req.cookies.get('paystack_session');
+      const sessionTimestampCookie = req.cookies.get('session_timestamp');
+      const isValidSession = sessionTimestampCookie &&
+          (Date.now() - parseInt(sessionTimestampCookie.value)) < 60 * 60 * 1000;
+  
+      if ((authRecoveryCookie?.value === 'true' || paystackSessionCookie) && isValidSession) {
+          console.log('Valid session recovery cookies detected, allowing request');
+          // Allow potential refresh by calling getSession before returning res
+          await supabase.auth.getSession();
+          return res;
+      }
+  
+      if (sessionTimestampCookie && !isValidSession) {
+          console.log('Session expired, clearing recovery cookies');
+          // Clear cookies manually on the 'res' object Supabase uses
+          res.cookies.set({ name: 'auth_recovery', value: '', maxAge: 0, path: '/' });
+          res.cookies.set({ name: 'recovery_user_id', value: '', maxAge: 0, path: '/' });
+          res.cookies.set({ name: 'paystack_session', value: '', maxAge: 0, path: '/' });
+          res.cookies.set({ name: 'session_timestamp', value: '', maxAge: 0, path: '/' });
+          // Proceed to normal auth check below after clearing cookies
+      }
+      // If no valid recovery cookies or session expired, proceed to normal auth check below
   }
   
   // Check if the path is public
   const isPublicPath = PUBLIC_PATHS.some(path => pathname.startsWith(path));
   if (isPublicPath) {
     console.log("Public path detected, skipping auth check");
-    return NextResponse.next();
+    // Still call getSession to allow Supabase to handle potential cookie updates
+    await supabase.auth.getSession();
+    return res; // Return Supabase-aware response
   }
   
-  // Initialize Supabase client with the request
-  const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
+  // --- Session Check and Handling ---
   
-  // Get the session from Supabase
+  // Get the session. Supabase helper modifies 'res' with Set-Cookie headers if needed.
   const { data: { session }, error } = await supabase.auth.getSession();
   
+  // Log session status
   console.log(`Session exists: ${!!session}`);
+  if (error) {
+      // Log the specific error for better debugging
+      console.error("Supabase getSession Error:", error.message);
+  }
   console.log("=================================");
   
-  // If no session and not a public path, redirect to sign in
-  if (!session && !isPublicPath) {
+  // If no session, redirect to sign in
+  if (!session) {
     const redirectUrl = new URL('/auth/sign-in', req.url);
-    
-    // Add the original URL as a query parameter for redirect after login
     redirectUrl.searchParams.set('redirectTo', req.nextUrl.pathname);
-    
     console.log(`No session, redirecting to ${redirectUrl.pathname}`);
+    // Return a new redirect response. Cookie clearing headers were added to 'res'
+    // by getSession(). The browser should process 'res' first.
     return NextResponse.redirect(redirectUrl);
   }
   
+  // --- Post-Authentication Logic ---
+  
   // Check role-based permissions for admin paths
-  if (session && ADMIN_PATHS.some(path => pathname.startsWith(path))) {
+  if (ADMIN_PATHS.some(path => pathname.startsWith(path))) {
+    // roleMiddleware handles its own Supabase client and response/redirects
+    console.log("Admin path detected, invoking role middleware");
     return roleMiddleware(req);
   }
   
-  // Continue to the requested page
-  return NextResponse.next();
+  // If session exists and it's not an admin path, allow access.
+  // IMPORTANT: Return the 'res' object potentially modified by Supabase.
+  console.log("Valid session, allowing access");
+  return res;
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.png$).*)"],
+  // Updated matcher to exclude more file extensions explicitly
+  matcher: [
+    "/((?!api/|_next/static|_next/image|favicon.ico|.*\.css$|.*\.js$|.*\.png$|.*\.jpg$|.*\.jpeg$|.*\.gif$|.*\.svg$).*)",
+  ],
 }
