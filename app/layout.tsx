@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <ThemeProvider defaultTheme="light">
           <AppInitializer />
           <Navigation />
-          <div className="pt-16 pb-20">
+          <div className="container mx-auto pt-16 pb-20">
             {children}
           </div>
         </ThemeProvider>
