@@ -89,14 +89,41 @@ export default function AdminDashboard() {
         }
         
         // Fetch recent shipments
-        const { data: recentShipments, error: recentError } = await supabase
+        // Skip any relational join attempts since they're causing errors
+        // We'll fetch shipments first, then profiles separately
+        let { data: recentShipments, error: recentError } = await supabase
           .from('shipments')
-          .select('*, profiles:user_id(first_name, last_name, email)')
+          .select('*')  // Just get all shipment data without joins
           .order('created_at', { ascending: false })
           .limit(5)
           
         if (recentError) {
           console.error("Error fetching recent shipments:", recentError)
+        } else if (recentShipments && recentShipments.length > 0) {
+          // Manually fetch profile data for each shipment
+          try {
+            const shipmentsWithProfiles = await Promise.all(
+              recentShipments.map(async (shipment) => {
+                if (shipment.user_id) {
+                  // Get profile data using user_id
+                  const { data: profileData } = await supabase
+                    .from('profiles')
+                    .select('first_name, last_name, email')
+                    .eq('id', shipment.user_id)
+                    .single()
+                  
+                  return {
+                    ...shipment,
+                    profiles: profileData || null
+                  }
+                }
+                return { ...shipment, profiles: null }
+              })
+            )
+            recentShipments = shipmentsWithProfiles
+          } catch (error) {
+            console.error("Error fetching profile data:", error)
+          }
         }
         
         setStats({
