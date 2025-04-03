@@ -30,7 +30,27 @@ export default function AdminDashboard() {
     recentShipments: [] as any[],
   })
 
+  // Create a standard client (with user's permissions)
   const supabase = createClientComponentClient<Database>()
+  
+  // Force count all users (admin operation - will still respect RLS)
+  const countAllUsers = async () => {
+    console.log("DEBUG - Running direct SQL count query...");
+    try {
+      // Try with a direct SQL query
+      const { data, error } = await supabase.rpc('count_all_profiles', {});
+      console.log("DEBUG - SQL count result:", data, error);
+      
+      if (error) {
+        console.error("Error with RPC count:", error);
+      } else {
+        return data;
+      }
+    } catch (err) {
+      console.error("Error counting users via SQL:", err);
+    }
+    return null;
+  }
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -73,10 +93,21 @@ export default function AdminDashboard() {
           // This counts all users in the profiles table, regardless of account_type
           
         console.log("DEBUG - All users count:", usersCount);
+        
+        // Fetch all users directly to see what we're getting
+        const { data: allProfiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, email, account_type');
+          
+        console.log("DEBUG - All profiles data:", allProfiles, "Error:", profilesError);
           
         if (usersError) {
           console.error("Error fetching users count:", usersError)
         }
+        
+        // Try to get a full count through direct SQL
+        const sqlCount = await countAllUsers();
+        console.log("DEBUG - SQL count result (all profiles):", sqlCount);
         
         // Fetch active users (with account_type set)
         const { count: activeUsersCount, error: activeUsersError } = await supabase
@@ -154,7 +185,7 @@ export default function AdminDashboard() {
           totalShipments: shipmentsCount || 0,
           pendingShipments: pendingCount || 0,
           completedShipments: completedCount || 0,
-          totalUsers: activeUsersCount || 0, // Only count users with account_type set
+          totalUsers: sqlCount || activeUsersCount || usersCount || 0, // Use SQL count if available, fallback to others
           totalRevenue,
           recentShipments: recentShipments || [],
         })
@@ -163,7 +194,7 @@ export default function AdminDashboard() {
           totalShipments: shipmentsCount || 0,
           pendingShipments: pendingCount || 0,
           completedShipments: completedCount || 0,
-          totalUsers: activeUsersCount || 0,
+          totalUsers: sqlCount || activeUsersCount || usersCount || 0, // Show which value we're using
           totalRevenue,
           recentShipments: recentShipments?.length || 0,
         });
