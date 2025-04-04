@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { 
@@ -27,6 +27,7 @@ import {
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useToast } from "@/components/ui/use-toast"
+import { QRCodeSVG } from 'qrcode.react'
 
 // Helper function to format dates
 const formatDate = (dateString: string) => {
@@ -45,22 +46,25 @@ export default function ShipmentDetailPage() {
   const [shipment, setShipment] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showPrintView, setShowPrintView] = useState(false)
+  const printContentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     async function fetchShipment() {
       try {
         setLoading(true)
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session } } = await supabase!.auth.getSession()
         
         if (!session) {
           router.push("/auth/sign-in")
           return
         }
 
-        const { data, error } = await supabase
+        // Fetch the shipment with all its details
+        const { data, error } = await supabase!
           .from("shipments")
           .select("*")
-          .eq("id", params.id)
+          .eq("id", params!.id)
           .single()
 
         if (error) {
@@ -68,7 +72,21 @@ export default function ShipmentDetailPage() {
         }
 
         if (data) {
-          setShipment(data)
+          // Fetch shipment items
+          const { data: items, error: itemsError } = await supabase!
+            .from("shipment_items")
+            .select("*")
+            .eq("shipment_id", data.id)
+          
+          if (itemsError) {
+            console.error("Error fetching shipment items:", itemsError)
+          }
+          
+          // Add items to shipment data
+          setShipment({
+            ...data,
+            items: items || []
+          })
         } else {
           setError("Shipment not found")
         }
@@ -85,10 +103,10 @@ export default function ShipmentDetailPage() {
       }
     }
 
-    if (params.id) {
+    if (params?.id) {
       fetchShipment()
     }
-  }, [params.id, router, toast])
+  }, [params?.id, router, toast])
 
   // Format special instructions to display in a readable format
   const formatSpecialInstructions = (instructions: string) => {
@@ -127,6 +145,107 @@ export default function ShipmentDetailPage() {
 
   // Parse the special instructions if available
   const parsedInstructions = shipment ? formatSpecialInstructions(shipment.special_instructions) : {}
+
+  // Handle print functionality
+  const handlePrint = () => {
+    setShowPrintView(true)
+    
+    // Wait for the print view to be rendered with QR code
+    setTimeout(() => {
+      const printContent = printContentRef.current
+      
+      if (printContent) {
+        // Create a new window for printing
+        const printWindow = window.open('', '_blank')
+        if (!printWindow) {
+          toast({
+            title: "Error",
+            description: "Unable to open print window. Please check your browser settings.",
+            variant: "destructive"
+          })
+          setShowPrintView(false)
+          return
+        }
+        
+        // Set up the print window content
+        printWindow.document.write(`
+          <html>
+            <head>
+              <title>Shipment ${shipment?.tracking_number} - Receipt</title>
+              <style>
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                  line-height: 1.5;
+                  padding: 20px;
+                  max-width: 800px;
+                  margin: 0 auto;
+                }
+                .header {
+                  text-align: center;
+                  margin-bottom: 20px;
+                  padding-bottom: 20px;
+                  border-bottom: 1px solid #e5e7eb;
+                }
+                .company-name {
+                  font-size: 24px;
+                  font-weight: bold;
+                  margin-bottom: 5px;
+                }
+                .receipt-title {
+                  font-size: 18px;
+                  color: #6b7280;
+                }
+                .section {
+                  margin-bottom: 20px;
+                  padding-bottom: 10px;
+                  border-bottom: 1px solid #e5e7eb;
+                }
+                .section-title {
+                  font-size: 16px;
+                  font-weight: bold;
+                  text-transform: uppercase;
+                  color: #6b7280;
+                  margin-bottom: 10px;
+                }
+                .info-row {
+                  display: flex;
+                  margin-bottom: 5px;
+                }
+                .info-label {
+                  width: 150px;
+                  font-weight: 500;
+                }
+                .info-value {
+                  flex: 1;
+                }
+                .footer {
+                  margin-top: 30px;
+                  text-align: center;
+                  font-size: 12px;
+                  color: #6b7280;
+                }
+                .qr-code {
+                  text-align: center;
+                  margin: 20px 0;
+                }
+              </style>
+            </head>
+            <body>
+              ${printContent.innerHTML}
+              <script>
+                window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 500); }
+              </script>
+            </body>
+          </html>
+        `)
+        
+        printWindow.document.close()
+      }
+      
+      // Reset print view state
+      setShowPrintView(false)
+    }, 500)
+  }
 
   if (loading) {
     return (
@@ -231,14 +350,14 @@ export default function ShipmentDetailPage() {
                 <MapPin className="w-5 h-5 mr-2 text-gray-500" />
                 <div>
                   <p className="text-sm font-medium">Origin</p>
-                  <p className="text-sm text-gray-600">{parsedInstructions.Origin || "Not specified"}</p>
+                  <p className="text-sm text-gray-600">{shipment.origin_text || "Not specified"}</p>
                 </div>
               </div>
               <div className="flex items-start">
                 <MapPin className="w-5 h-5 mr-2 text-gray-500" />
                 <div>
                   <p className="text-sm font-medium">Destination</p>
-                  <p className="text-sm text-gray-600">{parsedInstructions.Destination || "Not specified"}</p>
+                  <p className="text-sm text-gray-600">{shipment.destination_text || "Not specified"}</p>
                 </div>
               </div>
               <div className="flex items-start">
@@ -267,7 +386,14 @@ export default function ShipmentDetailPage() {
                 <div>
                   <p className="text-sm font-medium">Weight</p>
                   <p className="text-sm text-gray-600">
-                    {shipment.total_weight ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` : "Not specified"}
+                    {(() => {
+                      // Try to calculate total weight from shipment items
+                      if (shipment.items && Array.isArray(shipment.items) && shipment.items.length > 0) {
+                        const totalWeight = shipment.items.reduce((sum: number, item: any) => sum + (Number(item.weight || 0) * Number(item.quantity || 1)), 0);
+                        return totalWeight > 0 ? `${totalWeight} kg` : "Not specified";
+                      }
+                      return shipment.total_weight ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` : "Not specified";
+                    })()}
                   </p>
                 </div>
               </div>
@@ -276,16 +402,32 @@ export default function ShipmentDetailPage() {
                 <div>
                   <p className="text-sm font-medium">Dimensions</p>
                   <p className="text-sm text-gray-600">
-                    {shipment.dimensions ? (
-                      (() => {
+                    {(() => {
+                      if (shipment.dimensions) {
                         try {
-                          const dims = JSON.parse(shipment.dimensions);
+                          const dims = typeof shipment.dimensions === 'object' ? 
+                            shipment.dimensions : 
+                            JSON.parse(shipment.dimensions);
                           return `${dims.length}x${dims.width}x${dims.height} cm`;
                         } catch (e) {
                           return shipment.dimensions;
                         }
-                      })()
-                    ) : "Not specified"}
+                      } else if (shipment.items && Array.isArray(shipment.items) && shipment.items.length > 0) {
+                        // Try to get dimensions from first item with dimensions
+                        const itemWithDimensions = shipment.items.find((item: any) => item.dimensions);
+                        if (itemWithDimensions && itemWithDimensions.dimensions) {
+                          try {
+                            const dims = typeof itemWithDimensions.dimensions === 'object' ? 
+                              itemWithDimensions.dimensions : 
+                              JSON.parse(itemWithDimensions.dimensions);
+                            return `${dims.length}x${dims.width}x${dims.height} cm`;
+                          } catch (e) {
+                            return itemWithDimensions.dimensions;
+                          }
+                        }
+                      }
+                      return "Not specified";
+                    })()}
                   </p>
                 </div>
               </div>
@@ -316,7 +458,7 @@ export default function ShipmentDetailPage() {
         </CardContent>
         <Separator />
         <CardFooter className="flex justify-between pt-4">
-          <Button variant="outline" onClick={() => window.print()}>
+          <Button variant="outline" onClick={handlePrint}>
             Print Details
           </Button>
           <Button variant="default">
@@ -324,6 +466,113 @@ export default function ShipmentDetailPage() {
           </Button>
         </CardFooter>
       </Card>
+      
+      {/* Hidden printable content with QR code */}
+      {showPrintView && (
+        <div className="hidden" ref={printContentRef}>
+          <div className="header">
+            <div className="company-name">Shipping App</div>
+            <div className="receipt-title">Shipment Receipt</div>
+          </div>
+          
+          <div className="section">
+            <div className="section-title">Shipment Information</div>
+            <div className="info-row">
+              <div className="info-label">Tracking Number:</div>
+              <div className="info-value">{shipment.tracking_number}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Status:</div>
+              <div className="info-value">{shipment.status?.charAt(0).toUpperCase() + shipment.status?.slice(1) || "Unknown"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Service Type:</div>
+              <div className="info-value">{shipment.service_type || "Standard"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Created:</div>
+              <div className="info-value">
+                {shipment.created_at ? formatDate(shipment.created_at) : "Unknown"}
+              </div>
+            </div>
+          </div>
+          
+          <div className="section">
+            <div className="section-title">Route Information</div>
+            <div className="info-row">
+              <div className="info-label">Origin:</div>
+              <div className="info-value">{shipment.origin_text || "Not specified"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Destination:</div>
+              <div className="info-value">{shipment.destination_text || "Not specified"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Delivery Address:</div>
+              <div className="info-value">{shipment.delivery_address || "Not specified"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Recipient:</div>
+              <div className="info-value">{shipment.recipient_name || "Not specified"}</div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Recipient Phone:</div>
+              <div className="info-value">{shipment.recipient_phone || "Not specified"}</div>
+            </div>
+          </div>
+          
+          <div className="section">
+            <div className="section-title">Package Details</div>
+            <div className="info-row">
+              <div className="info-label">Weight:</div>
+              <div className="info-value">
+                {(() => {
+                  if (shipment.items && Array.isArray(shipment.items) && shipment.items.length > 0) {
+                    const totalWeight = shipment.items.reduce((sum: number, item: any) => sum + (Number(item.weight || 0) * Number(item.quantity || 1)), 0);
+                    return totalWeight > 0 ? `${totalWeight} kg` : "Not specified";
+                  }
+                  return shipment.total_weight ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` : "Not specified";
+                })()}
+              </div>
+            </div>
+          </div>
+          
+          <div className="section">
+            <div className="section-title">Payment Details</div>
+            <div className="info-row">
+              <div className="info-label">Amount:</div>
+              <div className="info-value">
+                {shipment.amount ? `${shipment.currency || 'NGN'} ${shipment.amount.toLocaleString()}` : "Not specified"}
+              </div>
+            </div>
+            <div className="info-row">
+              <div className="info-label">Payment Method:</div>
+              <div className="info-value">{shipment.payment_method || "Not specified"}</div>
+            </div>
+          </div>
+          
+          <div className="qr-code">
+            <QRCodeSVG 
+              value={JSON.stringify({
+                tracking: shipment.tracking_number,
+                origin: shipment.origin_text,
+                destination: shipment.destination_text,
+                id: shipment.id
+              })} 
+              size={150} 
+              level="H" 
+            />
+            <div style={{ marginTop: '10px', fontWeight: 'bold' }}>
+              Scan to track shipment
+            </div>
+          </div>
+          
+          <div className="footer">
+            <p>This is an automatically generated receipt.</p>
+            <p>For any questions, please contact our support team.</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
