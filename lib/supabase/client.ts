@@ -187,24 +187,36 @@ export async function getSession() {
  * Gets the user profile from the browser client
  */
 export async function getUserProfile() {
-  const { session, error } = await getSession()
+  const { data: { session }, error } = await createClient().auth.getSession();
   
-  if (error || !session) {
-    debugLog('No session found for profile retrieval')
-    return { profile: null, error: error || new Error('No session') }
+  if (error) {
+    debugLog('Session retrieval error in getUserProfile:', error);
+    return { profile: null, error };
   }
   
-  const client = createClient()
+  if (!session) {
+    debugLog('No session found in getUserProfile');
+    return { profile: null, error: new Error('No active session') };
+  }
+  
+  const currentUserId = session.user.id;
+  debugLog(`getUserProfile: Fetching profile for user ID: ${currentUserId}`);
+  
+  const client = createClient();
   const { data, error: profileError } = await client
     .from('profiles')
     .select('*')
-    .eq('id', session.user.id)
-    .single()
+    .eq('id', currentUserId)
+    .single();
   
   if (profileError) {
-    debugLog('Error getting profile:', profileError)
-    return { profile: null, error: profileError }
+    debugLog('Error getting profile in getUserProfile:', profileError);
+    if (profileError.code === 'PGRST116' || profileError.message.includes('permission denied') || profileError.message.includes('does not exist')) {
+      console.error(`RLS or Existence Error fetching profile for ${currentUserId}:`, profileError.message);
+    }
+    return { profile: null, error: profileError };
   }
   
-  return { profile: data, error: null }
+  debugLog('Successfully fetched profile:', data);
+  return { profile: data, error: null };
 }

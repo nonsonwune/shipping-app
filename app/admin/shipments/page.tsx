@@ -203,7 +203,7 @@ export default function ShipmentsManagement() {
         setLoading(true)
         
         // Get current session
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session } } = await supabase!.auth.getSession()
         
         if (!session) {
           console.error("No active session")
@@ -355,8 +355,7 @@ export default function ShipmentsManagement() {
       const formattedStatus = formatStatusForDatabase(shipmentStatus);
       
       // Update shipment status
-      const { error: updateError } = await supabase
-        .from('shipments')
+      const { error: updateError } = await supabase!.from('shipments')
         .update({ 
           status: formattedStatus,
           updated_at: now
