@@ -44,22 +44,24 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 interface Shipment {
   id: string;
   user_id: string;
-  service_type: string;
-  origin: string;
-  destination: string;
+  service_id: string | null;
+  origin_address_id: string | null;
+  destination_address_id: string | null;
+  origin_text: string | null;
+  destination_text: string | null;
   status: string;
   tracking_number: string;
   created_at: string;
   updated_at: string | null;
   estimated_delivery: string | null;
-  weight: number | null;
+  total_weight: number | null;
+  weight_unit: string | null;
   dimensions: string | null;
-  carrier: string | null;
-  package_description: string | null;
   recipient_name: string | null;
-  recipient_email: string | null;
   recipient_phone: string | null;
   amount: number | null;
+  delivery_instructions: string | null;
+  description: string | null;
 }
 
 // Hard-coded admin emails for verification
@@ -168,12 +170,12 @@ const formatStatusForDatabase = (status: string): string => {
   return status.replace(/\s+/g, '_');
 };
 
-// Format currency 
+// Format currency - Updated to only use Naira (₦)
 const formatCurrency = (value: number | null) => {
   if (value === null || value === undefined) return 'N/A';
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('en-NG', {
     style: 'currency',
-    currency: 'USD'
+    currency: 'NGN'
   }).format(value);
 };
 
@@ -274,11 +276,12 @@ export default function ShipmentsManagement() {
     // Apply search term filter
     if (searchTerm) {
       results = results.filter(shipment => 
-        shipment.recipient_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        shipment.tracking_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         shipment.recipient_phone?.includes(searchTerm) ||
-        shipment.origin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        shipment.destination.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (shipment.recipient_email && shipment.recipient_email.toLowerCase().includes(searchTerm.toLowerCase()))
+        shipment.recipient_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        shipment.origin_text?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        shipment.destination_text?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        shipment.status?.toLowerCase().includes(searchTerm.toLowerCase())
       )
     }
     
@@ -582,29 +585,29 @@ export default function ShipmentsManagement() {
           </div>
           
           {/* Shipments table */}
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/4 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Shipment Details
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/6 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Customer
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/6 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Origin/Destination
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/12 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/12 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Amount
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/12 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Date
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="w-1/12 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -626,29 +629,32 @@ export default function ShipmentsManagement() {
                           </div>
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
-                              {shipment.service_type}
+                              {shipment.tracking_number || "No tracking number"}
                             </div>
                             <div className="text-sm text-gray-500">
-                              {shipment.weight} kg
+                              {shipment.total_weight ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` : "Weight not specified"}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {shipment.description || "No description"}
                             </div>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">{shipment.recipient_name}</div>
-                        <div className="text-sm text-gray-500">{shipment.recipient_phone}</div>
+                        <div className="text-sm text-gray-900">{shipment.recipient_name || "Customer"}</div>
+                        <div className="text-sm text-gray-500">{shipment.recipient_phone || "No phone"}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">{shipment.origin}</div>
-                        <div className="text-sm text-gray-500">→ {shipment.destination}</div>
+                        <div className="text-sm text-gray-900">{shipment.origin_text || "Origin not specified"}</div>
+                        <div className="text-sm text-gray-500">→ {shipment.destination_text || "Destination not specified"}</div>
                       </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${getStatusColorClass(shipment.status)}`}>
                           {formatStatusForDisplay(shipment.status)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        ₦{formatCurrency(shipment.amount)}
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
+                        {formatCurrency(shipment.amount)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {new Date(shipment.created_at).toLocaleDateString()}
@@ -734,12 +740,12 @@ export default function ShipmentsManagement() {
                   
                   <div className="font-medium text-right">Customer:</div>
                   <div className="col-span-3 text-sm">
-                    {editingShipment.recipient_name} ({editingShipment.recipient_phone})
+                    {editingShipment.recipient_name ? `${editingShipment.recipient_name} (${editingShipment.recipient_phone || 'No phone'})` : editingShipment.recipient_phone || 'No phone'}
                   </div>
                   
                   <div className="font-medium text-right">Route:</div>
                   <div className="col-span-3 text-sm">
-                    {editingShipment.origin} → {editingShipment.destination}
+                    {editingShipment.origin_text ? `${editingShipment.origin_text} → ${editingShipment.destination_text || 'Destination not specified'}` : 'Route details unavailable'}
                   </div>
                   
                   <div className="font-medium text-right">Current Status:</div>
