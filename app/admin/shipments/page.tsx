@@ -11,7 +11,7 @@ import {
   Calendar,
   RefreshCw
 } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -55,6 +55,7 @@ interface Shipment {
   updated_at: string | null;
   estimated_delivery: string | null;
   total_weight: number | null;
+  weight: number | null;
   weight_unit: string | null;
   dimensions: string | null;
   recipient_name: string | null;
@@ -62,11 +63,18 @@ interface Shipment {
   amount: number | null;
   delivery_instructions: string | null;
   description: string | null;
+  package_description: string | null;
+  item_description: string | null;
+  package_details?: { weight?: number | null };
+  [key: string]: any;
 }
 
-// Hard-coded admin emails for verification
-// In production, this would ideally be stored in environment variables
-const ADMIN_EMAILS = ['admin@yourcompany.com'];
+// Get admin emails from environment variable
+// Format: comma-separated list of email addresses
+const ADMIN_EMAILS = process.env.NEXT_PUBLIC_ADMIN_EMAILS?.split(',').map(email => email.trim()) || [
+  // Fallback default values if env variable is not set
+  'admin@yourcompany.com'
+];
 
 // Constants for shipment workflow
 const STATUS_TRANSITIONS: Record<string, {
@@ -136,8 +144,9 @@ const STAFF_ROLES: Record<string, {
 
 // Get allowed status transitions based on user role
 const getAllowedStatusTransitions = (currentStatus: string, userRole: string): string[] => {
+  // For admin users, always return the four specific statuses requested
   if (userRole === 'admin') {
-    return Object.keys(STATUS_TRANSITIONS);
+    return ['pending', 'processing', 'in_transit', 'delivered'];
   }
   
   const staffRole = userRole.toLowerCase();
@@ -149,15 +158,26 @@ const getAllowedStatusTransitions = (currentStatus: string, userRole: string): s
 };
 
 // Check if user can update to a specific status
-const canUpdateToStatus = (targetStatus: string, userRole: string): boolean => {
-  if (userRole === 'admin') return true;
+const canUpdateToStatus = (currentStatus: string, newStatus: string, userRole: string): boolean => {
+  // Add debugging
+  debugLog(`Checking update permission: role=${userRole}, currentStatus=${currentStatus}, newStatus=${newStatus}`);
+  
+  // Admin can always update to any status
+  if (userRole === 'admin') {
+    debugLog('User is admin, permitting status update');
+    return true;
+  }
   
   const staffRole = userRole.toLowerCase();
   if (!STAFF_ROLES[staffRole]) {
+    debugLog(`No permissions defined for role: ${staffRole}`);
     return false;
   }
   
-  return STAFF_ROLES[staffRole].canUpdateToStatuses.includes(targetStatus);
+  // Log the allowed statuses for this role
+  debugLog(`Allowed statuses for ${staffRole}:`, STAFF_ROLES[staffRole].canUpdateToStatuses);
+  
+  return STAFF_ROLES[staffRole].canUpdateToStatuses.includes(newStatus);
 };
 
 // Helper function to format status for display
@@ -165,10 +185,23 @@ const formatStatusForDisplay = (status: string): string => {
   return status.replace(/_/g, ' ');
 };
 
-// Helper function to format status for database
-const formatStatusForDatabase = (status: string): string => {
-  return status.replace(/\s+/g, '_');
-};
+// Format status for database - ensure it matches the db constraint
+function formatStatusForDatabase(status: string): string {
+  debugLog('Formatting status for DB:', status);
+  
+  // Standardize the status first (lowercase and trim)
+  let formattedStatus = status.toLowerCase().trim();
+  
+  // Handle special cases
+  if (formattedStatus === 'in transit' || formattedStatus === 'in-transit') {
+    formattedStatus = 'in_transit';
+  } else if (formattedStatus === 'in process' || formattedStatus === 'in-process') {
+    formattedStatus = 'processing';
+  }
+  
+  debugLog('Final formatted status:', formattedStatus);
+  return formattedStatus;
+}
 
 // Format currency - Updated to only use Naira (₦)
 const formatCurrency = (value: number | null) => {
@@ -178,6 +211,12 @@ const formatCurrency = (value: number | null) => {
     currency: 'NGN'
   }).format(value);
 };
+
+// Add this after imports
+const DEBUG_ENABLED = true;
+function debugLog(...args: any[]) {
+  if (DEBUG_ENABLED) console.log('[SHIPMENT_DEBUG]', ...args);
+}
 
 export default function ShipmentsManagement() {
   const [loading, setLoading] = useState(true)
@@ -199,6 +238,7 @@ export default function ShipmentsManagement() {
   // Fetch shipments and check user role
   useEffect(() => {
     const fetchShipmentsAndRole = async () => {
+      const supabase = createClient();
       // Add check for supabase client
       if (!supabase) {
           console.error("Admin Shipments: Supabase client is not available.");
@@ -228,14 +268,21 @@ export default function ShipmentsManagement() {
         
         if (userEmail && ADMIN_EMAILS.includes(userEmail.toLowerCase())) {
           highestRole = 'admin'
+          debugLog(`User ${userEmail} identified as admin`);
         } else if (userEmail && userEmail.includes("staff")) {
           highestRole = 'staff'
+          debugLog(`User ${userEmail} identified as staff`);
+        } else {
+          debugLog(`User ${userEmail} identified as regular user`);
         }
         
+        // Set the role explicitly
         setUserRole(highestRole)
+        debugLog(`User role set to: ${highestRole}`);
         
         // Fetch shipments
         const fetchShipments = async () => {
+            const supabase = createClient();
             // Add check here too, though less likely to be null if checked above
             if (!supabase) {
                 console.error("Admin Shipments: Supabase client unavailable for fetching.");
@@ -244,6 +291,10 @@ export default function ShipmentsManagement() {
             }
           try {
             setLoading(true);
+            
+            // Log to check we're making the query
+            console.log("Fetching shipments with full details...");
+            
             const { data, error } = await supabase
               .from('shipments')
               .select('*')
@@ -252,6 +303,9 @@ export default function ShipmentsManagement() {
             if (error) {
               throw error;
             }
+
+            // Log the data to see what fields are available
+            console.log("Shipments data sample:", data && data.length > 0 ? data[0] : "No shipments found");
 
             // Type assertion to handle the Supabase type mismatch
             setShipments(data as unknown as Shipment[]);
@@ -333,10 +387,21 @@ export default function ShipmentsManagement() {
   
   // Open edit dialog
   const handleEditShipment = (shipment: Shipment) => {
-    setEditingShipment(shipment)
-    setShipmentStatus(shipment.status)
-    setStatusNote("")
-    setIsDialogOpen(true)
+    console.log("Opening edit dialog for shipment:", shipment);
+    setEditingShipment(shipment);
+    
+    // Make sure the initial status is set correctly 
+    // or default to the first status if there's an issue
+    if (!shipment.status || shipment.status === '') {
+      console.log("No status found, defaulting to 'pending'");
+      setShipmentStatus('pending');
+    } else {
+      console.log("Setting initial status to:", shipment.status);
+      setShipmentStatus(shipment.status);
+    }
+    
+    setStatusNote("");
+    setIsDialogOpen(true);
   }
   
   // Clear filters
@@ -349,16 +414,29 @@ export default function ShipmentsManagement() {
   
   // Update shipment status
   const handleUpdateStatus = async () => {
+    console.log("Update status button clicked", { shipmentStatus, editingShipment });
+    debugLog("Starting status update process");
+    
+    const supabase = createClient();
     // Add check for supabase client
     if (!supabase) {
         console.error("Admin Shipments: Supabase client unavailable for update.");
         toast({ title: "Error", description: "Database connection failed.", variant: "destructive" });
         return;
     }
-    if (!editingShipment) return;
+    
+    debugLog("Supabase client created successfully");
+    
+    if (!editingShipment) {
+      console.error("No shipment selected for update");
+      return;
+    }
+    
+    debugLog("EditingShipment exists, checking permissions");
     
     // Check if user has permission to update to the selected status
-    if (!canUpdateToStatus(shipmentStatus, userRole)) {
+    if (!canUpdateToStatus(editingShipment.status, shipmentStatus, userRole)) {
+      debugLog("Status update permission denied");
       toast({
         title: "Permission Denied",
         description: `You don't have permission to update shipments to ${formatStatusForDisplay(shipmentStatus)} status`,
@@ -366,6 +444,8 @@ export default function ShipmentsManagement() {
       });
       return;
     }
+    
+    debugLog("Permission check passed, proceeding with update");
     
     try {
       setLoading(true);
@@ -375,86 +455,77 @@ export default function ShipmentsManagement() {
       // Ensure status is properly formatted for database
       const formattedStatus = formatStatusForDatabase(shipmentStatus);
       
+      debugLog("Status conversion:", {
+        input: shipmentStatus,
+        formatted: formattedStatus,
+        allowedInDb: ['pending', 'processing', 'in_transit', 'delivered', 'canceled', 'returned']
+      });
+      
+      console.log("Updating shipment status:", {
+        shipmentId: editingShipment.id,
+        currentStatus: editingShipment.status,
+        newStatus: formattedStatus
+      });
+      
+      // Check if status is actually changing
+      if (editingShipment.status === formattedStatus) {
+        debugLog("Status unchanged - not sending update to database");
+        toast({
+          title: "No Change",
+          description: "The status is already set to " + formatStatusForDisplay(formattedStatus),
+        });
+        setLoading(false);
+        setIsDialogOpen(false);
+        return;
+      }
+      
+      // Log the exact query we're about to send
+      debugLog("Preparing database update:", {
+        table: 'shipments',
+        id: editingShipment.id,
+        update: { status: formattedStatus, updated_at: now }
+      });
+      
       // Update shipment status
-      const { error: updateError } = await supabase.from('shipments')
+      debugLog("Executing Supabase update...");
+      const updateResult = await supabase
+        .from('shipments')
         .update({ 
           status: formattedStatus,
           updated_at: now
-        } as any)
-        .eq('id', editingShipment.id as any);
+        })
+        .eq('id', editingShipment.id)
+        .select();
+      
+      debugLog("Raw update response:", updateResult);
+      
+      const { data: updateData, error: updateError } = updateResult;
       
       if (updateError) {
         console.error("Error updating shipment status:", updateError);
+        debugLog("Update error details:", {
+          message: updateError.message,
+          details: updateError.details,
+          hint: updateError.hint,
+          code: updateError.code
+        });
+        
         toast({
           title: "Error",
-          description: "Failed to update shipment status",
+          description: "Failed to update shipment status: " + updateError.message,
           variant: "destructive"
         });
         return;
       }
       
-      // Determine who should be notified based on the new status
-      const transitionInfo = STATUS_TRANSITIONS[shipmentStatus];
-      const nextStatus = transitionInfo?.nextStatus;
-      const nextRequiredRole = transitionInfo?.requiredRole;
+      console.log("Update successful:", updateData);
+      debugLog("Status update succeeded:", updateData);
       
-      // Add status update notification for the customer
-      if (statusNote.trim()) {
-        try {
-          const { error: userNotificationError } = await supabase
-            .from('notifications')
-            .insert({
-              user_id: editingShipment.user_id,
-              type: 'status_update',
-              title: `Shipment Status Updated: ${formatStatusForDisplay(shipmentStatus)}`,
-              message: statusNote.trim(),
-              created_at: now,
-              is_read: false
-            } as any);
-          
-          if (userNotificationError) {
-            console.error("Error creating user notification:", userNotificationError);
-          }
-        } catch (err) {
-          console.error("Failed to create notification:", err);
-        }
-      }
-      
-      // If there's a next status, create notification for the appropriate staff
-      if (nextStatus && nextRequiredRole) {
-        try {
-          // In a real application, you would query for users with this role
-          // and create targeted notifications for those specific users
-          const { error: staffNotificationError } = await supabase
-            .from('staff_notifications')
-            .insert({
-              shipment_id: editingShipment.id,
-              type: 'status_ready_for_update',
-              title: `Shipment Ready for ${formatStatusForDisplay(nextStatus)}`,
-              message: `Shipment #${editingShipment.id.slice(0, 8)} is ready to be updated to ${formatStatusForDisplay(nextStatus)}.`,
-              required_role: nextRequiredRole,
-              created_at: now,
-              is_read: false,
-              is_assigned: false
-            } as any);
-          
-          if (staffNotificationError) {
-            console.error("Error creating staff notification:", staffNotificationError);
-          }
-        } catch (err) {
-          console.error("Failed to create staff notification:", err);
-        }
-      }
-      
-      toast({
-        title: "Success",
-        description: `Shipment status updated to ${formatStatusForDisplay(shipmentStatus)}`,
-      });
-      
-      // Update local state
+      // Update local state immediately
       setShipments(prevShipments =>
         prevShipments.map(shipment => {
           if (shipment.id === editingShipment.id) {
+            debugLog("Updating shipment in local state:", shipment.id);
             return {
               ...shipment,
               status: formattedStatus,
@@ -465,16 +536,150 @@ export default function ShipmentsManagement() {
         })
       );
       
+      // Close the dialog now that the primary action is complete
       setIsDialogOpen(false);
+      
+      // Show success notification
+      toast({
+        title: "Success",
+        description: `Shipment status updated to ${formatStatusForDisplay(shipmentStatus)}`,
+      });
+      
+      // Handle notifications after the main update is complete
+      handleNotifications(supabase, editingShipment, shipmentStatus, statusNote, now);
+      
     } catch (error) {
+      debugLog("Caught exception during update:", error);
       console.error("Error updating shipment status:", error);
       toast({
         title: "Error",
-        description: "An unexpected error occurred",
+        description: "An unexpected error occurred: " + (error instanceof Error ? error.message : String(error)),
         variant: "destructive"
       });
     } finally {
       setLoading(false);
+    }
+  };
+  
+  // Separate function to handle notifications
+  const handleNotifications = async (
+    supabase: any, 
+    shipment: Shipment, 
+    status: string, 
+    note: string, 
+    timestamp: string
+  ) => {
+    try {
+      debugLog("Starting notification creation");
+      
+      // Determine who should be notified based on the new status
+      const transitionInfo = STATUS_TRANSITIONS[status];
+      const nextStatus = transitionInfo?.nextStatus;
+      const nextRequiredRole = transitionInfo?.requiredRole;
+      
+      // Add status update notification for the customer if there's a note
+      if (note.trim()) {
+        try {
+          debugLog("Creating user notification for status update");
+          const notificationData = {
+            user_id: shipment.user_id,
+            type: 'status_update',
+            title: `Shipment Status Updated: ${formatStatusForDisplay(status)}`,
+            message: note.trim(),
+            date: timestamp,
+            is_read: false
+          };
+          
+          debugLog("Notification data:", notificationData);
+          
+          const { error: userNotificationError } = await supabase
+            .from('notifications')
+            .insert(notificationData);
+          
+          if (userNotificationError) {
+            debugLog("Error creating user notification:", userNotificationError);
+            console.error("Error creating user notification:", userNotificationError);
+          } else {
+            debugLog("User notification created successfully");
+          }
+        } catch (err) {
+          debugLog("Exception in notification creation:", err);
+          console.error("Failed to create notification:", err);
+        }
+      }
+      
+      // If there's a next status, create notification for the appropriate staff
+      if (nextStatus && nextRequiredRole) {
+        try {
+          debugLog("Creating staff notification for next status");
+          
+          // First check if staff_notifications table exists
+          const { error: tableCheckError } = await supabase
+            .from('staff_notifications')
+            .select('id')
+            .limit(1);
+            
+          if (tableCheckError) {
+            debugLog("staff_notifications table doesn't exist or isn't accessible", tableCheckError);
+            debugLog("Creating regular notification instead");
+            
+            // Create a regular notification as fallback
+            try {
+              const adminNotification = {
+                user_id: shipment.user_id, // Send to the shipment owner for now
+                type: 'staff_notification',
+                title: `Staff Action Required: ${formatStatusForDisplay(nextStatus)}`,
+                message: `Shipment #${shipment.tracking_number} is ready to be updated to ${formatStatusForDisplay(nextStatus)}.`,
+                date: timestamp,
+                is_read: false
+              };
+              
+              await supabase
+                .from('notifications')
+                .insert(adminNotification);
+                
+              debugLog("Created fallback notification");
+            } catch (fallbackError) {
+              debugLog("Error creating fallback notification:", fallbackError);
+            }
+            
+            return; // Skip staff notification creation
+          }
+          
+          // In a real application, you would query for users with this role
+          // and create targeted notifications for those specific users
+          const staffNotificationData = {
+            shipment_id: shipment.id,
+            type: 'status_ready_for_update',
+            title: `Shipment Ready for ${formatStatusForDisplay(nextStatus)}`,
+            message: `Shipment #${shipment.id.slice(0, 8)} is ready to be updated to ${formatStatusForDisplay(nextStatus)}.`,
+            required_role: nextRequiredRole,
+            date: timestamp,
+            is_read: false,
+            is_assigned: false
+          };
+          
+          debugLog("Staff notification data:", staffNotificationData);
+          
+          const { error: staffNotificationError } = await supabase
+            .from('staff_notifications')
+            .insert(staffNotificationData);
+          
+          if (staffNotificationError) {
+            debugLog("Error creating staff notification:", staffNotificationError);
+            console.error("Error creating staff notification:", staffNotificationError);
+          } else {
+            debugLog("Staff notification created successfully");
+          }
+        } catch (err) {
+          debugLog("Exception in staff notification creation:", err);
+          console.error("Failed to create staff notification:", err);
+        }
+      }
+    } catch (notificationError) {
+      debugLog("Error in handleNotifications:", notificationError);
+      console.error("Error handling notifications:", notificationError);
+      // Don't show this error to user since the main action succeeded
     }
   };
 
@@ -652,9 +857,13 @@ export default function ShipmentsManagement() {
                               {shipment.tracking_number || "No tracking number"}
                             </div>
                             <div className="text-sm text-gray-500">
-                              {shipment.total_weight ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` : "Weight not specified"}
+                              {/* Only check for total_weight which exists in the database */}
+                              {shipment.total_weight 
+                                ? `${shipment.total_weight} ${shipment.weight_unit || 'kg'}` 
+                                : "Weight not specified"}
                             </div>
                             <div className="text-xs text-gray-400">
+                              {/* Only check for description which exists in the database */}
                               {shipment.description || "No description"}
                             </div>
                           </div>
@@ -780,7 +989,10 @@ export default function ShipmentsManagement() {
                   <Label htmlFor="status">New Status</Label>
                   <Select
                     value={shipmentStatus}
-                    onValueChange={setShipmentStatus}
+                    onValueChange={(value) => {
+                      console.log("Status changed to:", value);
+                      setShipmentStatus(value);
+                    }}
                   >
                     <SelectTrigger id="status">
                       <div className="flex items-center">
@@ -789,9 +1001,13 @@ export default function ShipmentsManagement() {
                       </div>
                     </SelectTrigger>
                     <SelectContent>
-                      {getAllowedStatusTransitions(editingShipment.status, userRole).map(status => (
-                        <SelectItem key={status} value={status}>{formatStatusForDisplay(status)}</SelectItem>
-                      ))}
+                      {/* Show the statuses allowed by the updated database constraint */}
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="processing">Processing</SelectItem>
+                      <SelectItem value="in_transit">In Transit</SelectItem>
+                      <SelectItem value="delivered">Delivered</SelectItem>
+                      <SelectItem value="canceled">Canceled</SelectItem>
+                      <SelectItem value="returned">Returned</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -816,7 +1032,14 @@ export default function ShipmentsManagement() {
             >
               Cancel
             </Button>
-            <Button onClick={handleUpdateStatus} disabled={loading}>
+            <Button 
+              onClick={(e) => {
+                e.preventDefault();
+                console.log("Update button clicked");
+                handleUpdateStatus();
+              }} 
+              disabled={loading}
+            >
               {loading ? "Updating..." : "Update Status"}
             </Button>
           </DialogFooter>

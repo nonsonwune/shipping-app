@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { BarChart, ResponsiveContainer, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -25,42 +25,25 @@ export default function AnalyticsPage() {
       try {
         setLoading(true)
         
-        // Get date ranges based on selected time period
-        const endDate = new Date()
-        let startDate = new Date()
-        let previousStartDate = new Date()
-        let groupByFormat = ""
+        // Get start and end dates for current period
+        const currentEndDate = new Date()
+        const currentStartDate = new Date()
+        currentStartDate.setDate(currentStartDate.getDate() - 30) // Last 30 days
         
-        switch(timeRange) {
-          case "week":
-            startDate.setDate(endDate.getDate() - 7)
-            previousStartDate.setDate(startDate.getDate() - 7)
-            groupByFormat = "day"
-            break
-          case "month":
-            startDate.setMonth(endDate.getMonth() - 1)
-            previousStartDate.setMonth(startDate.getMonth() - 1)
-            groupByFormat = "week"
-            break
-          case "year":
-            startDate.setFullYear(endDate.getFullYear() - 1)
-            previousStartDate.setFullYear(startDate.getFullYear() - 1)
-            groupByFormat = "month"
-            break
-        }
+        // Get start and end dates for previous period
+        const prevEndDate = new Date(currentStartDate)
+        const prevStartDate = new Date(currentStartDate)
+        prevStartDate.setDate(prevStartDate.getDate() - 30) // Previous 30 days
         
-        // Convert dates to ISO strings
-        const startDateStr = startDate.toISOString()
-        const endDateStr = endDate.toISOString()
-        const previousStartDateStr = previousStartDate.toISOString()
+        // Initialize Supabase client
+        const supabase = createClient()
         
         // Fetch all shipments within the date range
         const { data: currentShipments, error: shipmentsError } = await supabase
           .from('shipments')
           .select('*')
-          .gte('created_at', startDateStr)
-          .lte('created_at', endDateStr)
-          .order('created_at', { ascending: true })
+          .gte('created_at', currentStartDate.toISOString())
+          .lte('created_at', currentEndDate.toISOString())
         
         if (shipmentsError) {
           console.error("Error fetching shipments:", shipmentsError)
@@ -71,41 +54,82 @@ export default function AnalyticsPage() {
         const { data: previousShipments, error: prevShipmentsError } = await supabase
           .from('shipments')
           .select('*')
-          .gte('created_at', previousStartDateStr)
-          .lt('created_at', startDateStr)
+          .gte('created_at', prevStartDate.toISOString())
+          .lte('created_at', prevEndDate.toISOString())
         
         if (prevShipmentsError) {
           console.error("Error fetching previous shipments:", prevShipmentsError)
+          return
         }
         
         // Fetch users created in current period
         const { data: currentUsers, error: usersError } = await supabase
           .from('profiles')
           .select('*')
-          .gte('created_at', startDateStr)
-          .lte('created_at', endDateStr)
+          .gte('created_at', currentStartDate.toISOString())
+          .lte('created_at', currentEndDate.toISOString())
         
         if (usersError) {
           console.error("Error fetching users:", usersError)
+          return
         }
         
         // Fetch users created in previous period
         const { data: previousUsers, error: prevUsersError } = await supabase
           .from('profiles')
           .select('*')
-          .gte('created_at', previousStartDateStr)
-          .lt('created_at', startDateStr)
+          .gte('created_at', prevStartDate.toISOString())
+          .lte('created_at', prevEndDate.toISOString())
         
         if (prevUsersError) {
           console.error("Error fetching previous users:", prevUsersError)
+          return
         }
+        
+        // Process the data for display
+        
+        // Data by status
+        const statusCounts: Record<string, number> = {}
+        
+        // Type-safe version of the loop
+        currentShipments?.forEach((shipment: any) => {
+          const status = shipment.status || 'unknown'
+          statusCounts[status] = (statusCounts[status] || 0) + 1
+        })
+        
+        const statusData = Object.entries(statusCounts).map(([status, count]) => ({
+          status: status.replace(/_/g, ' '),
+          count
+        }))
+        
+        // Revenue data for current vs previous period
+        const currentRevenue = currentShipments?.reduce((sum: number, s: any) => sum + (s.amount || 0), 0) || 0
+        const previousRevenue = previousShipments?.reduce((sum: number, s: any) => sum + (s.amount || 0), 0) || 0
+        
+        // Calculate comparative stats
+        const currentTotalShipments = currentShipments?.length || 0
+        const previousTotalShipments = previousShipments?.length || 0
+        
+        const averageOrderValue = currentTotalShipments > 0 ? currentRevenue / currentTotalShipments : 0
+        
+        // Calculate growth percentages
+        const shipmentsGrowth = calculateGrowthPercentage(currentTotalShipments, previousTotalShipments)
+        const revenueGrowth = calculateGrowthPercentage(currentRevenue, previousRevenue)
+        const userGrowth = calculateGrowthPercentage(currentUsers?.length || 0, previousUsers?.length || 0)
+        
+        setComparisons({
+          shipmentsGrowth,
+          revenueGrowth,
+          userGrowth,
+          averageOrder: averageOrderValue
+        })
         
         // Process shipments by date
         const shipmentsByDate: Record<string, number> = {}
         const revenueByDate: Record<string, number> = {}
         
         // Initialize date range for the chart based on time range
-        const dateLabels = generateDateLabels(startDate, endDate, timeRange)
+        const dateLabels = generateDateLabels(currentStartDate, currentEndDate, timeRange)
         dateLabels.forEach(date => {
           shipmentsByDate[date] = 0
           revenueByDate[date] = 0
@@ -131,30 +155,6 @@ export default function AnalyticsPage() {
         
         setShipmentStats(shipmentData)
         setRevenueStats(revenueData)
-        
-        // Calculate comparative stats
-        const currentTotalShipments = currentShipments?.length || 0
-        const previousTotalShipments = previousShipments?.length || 0
-        
-        const currentTotalRevenue = currentShipments?.reduce((sum, s) => sum + (s.amount || 0), 0) || 0
-        const previousTotalRevenue = previousShipments?.reduce((sum, s) => sum + (s.amount || 0), 0) || 0
-        
-        const currentTotalUsers = currentUsers?.length || 0
-        const previousTotalUsers = previousUsers?.length || 0
-        
-        const averageOrderValue = currentTotalShipments > 0 ? currentTotalRevenue / currentTotalShipments : 0
-        
-        // Calculate growth percentages
-        const shipmentsGrowth = calculateGrowthPercentage(currentTotalShipments, previousTotalShipments)
-        const revenueGrowth = calculateGrowthPercentage(currentTotalRevenue, previousTotalRevenue)
-        const userGrowth = calculateGrowthPercentage(currentTotalUsers, previousTotalUsers)
-        
-        setComparisons({
-          shipmentsGrowth,
-          revenueGrowth,
-          userGrowth,
-          averageOrder: averageOrderValue
-        })
         
       } catch (error) {
         console.error("Error fetching analytics data:", error)

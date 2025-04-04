@@ -15,8 +15,7 @@ type Notification = {
   title: string;
   message: string;
   is_read: boolean;
-  created_at: string;
-  metadata?: any;
+  date: string;
 }
 
 export default function NotificationsPage() {
@@ -280,7 +279,7 @@ export default function NotificationsPage() {
                       </div>
                       <p className="text-gray-600 dark:text-gray-300 text-sm mb-2">{notification.message}</p>
                       <p className="text-gray-500 dark:text-gray-400 text-xs">
-                        {notification.created_at ? formatDate(notification.created_at) : 'Just now'}
+                        {notification.date ? formatDate(notification.date) : 'Just now'}
                       </p>
                     </div>
                   </div>
@@ -326,7 +325,7 @@ export default function NotificationsPage() {
                         </div>
                         <p className="text-gray-600 dark:text-gray-300 text-sm mb-2">{notification.message}</p>
                         <p className="text-gray-500 dark:text-gray-400 text-xs">
-                          {notification.created_at ? formatDate(notification.created_at) : 'Just now'}
+                          {notification.date ? formatDate(notification.date) : 'Just now'}
                         </p>
                       </div>
                     </div>

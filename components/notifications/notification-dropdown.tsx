@@ -30,8 +30,7 @@ type Notification = {
   title: string
   message: string
   is_read: boolean
-  data: any
-  created_at: string
+  date: string
 }
 
 // Wrap the component with error handling
@@ -264,7 +263,7 @@ function SafeNotificationDropdown() {
                     </p>
                     <p className="text-sm text-gray-500 break-words">{notification.message}</p>
                     <p className="text-xs text-gray-400 mt-1">
-                      {safeFormatRelative(notification.created_at, 'Just now')}
+                      {safeFormatRelative(notification.date, 'Just now')}
                     </p>
                   </div>
                   {!notification.is_read && (

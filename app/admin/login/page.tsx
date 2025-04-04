@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@/lib/supabase/client';
 import { Database } from '@/types/supabase';
 import { Eye, EyeOff, AlertCircle, Info } from 'lucide-react';
 import Link from 'next/link';
@@ -17,7 +17,7 @@ function AdminLoginForm() {
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = createClientComponentClient<Database>();
+  const supabase = createClient();
 
   useEffect(() => {
     // Check for error messages in the URL

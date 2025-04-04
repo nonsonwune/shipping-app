@@ -1,78 +1,99 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useTransition } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowLeft, Package, Filter, Search, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { formatDistanceToNow, format } from "date-fns"
+
+// Define shipment type
+interface Shipment {
+  id: string;
+  tracking_number?: string;
+  service_type?: string;
+  status?: string;
+  origin?: string;
+  destination?: string;
+  origin_text?: string;
+  destination_text?: string;
+  created_at: string;
+  updated_at?: string;
+  user_id: string;
+  amount?: number;
+  [key: string]: any; // For any other properties
+}
 
 export default function ShipmentsPage() {
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeShipments, setActiveShipments] = useState([])
-  const [completedShipments, setCompletedShipments] = useState([])
+  const [activeShipments, setActiveShipments] = useState<Shipment[]>([])
+  const [completedShipments, setCompletedShipments] = useState<Shipment[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    async function fetchShipments() {
+    const fetchShipments = async () => {
       try {
         setLoading(true)
+        
+        const supabase = createClient()
         
         // First check if user is authenticated
         const { data: { session } } = await supabase.auth.getSession()
         
         if (!session) {
-          // Handle unauthenticated state
-          console.error("No session found")
           setError("Please sign in to view your shipments")
           setLoading(false)
           return
         }
-
+        
         // Fetch shipments with active statuses (not delivered or cancelled)
         const { data: activeData, error: activeError } = await supabase
           .from("shipments")
           .select("*")
-          .not("status", "eq", "delivered")
-          .not("status", "eq", "cancelled")
+          .eq("user_id", session.user.id)
+          .not("status", "in", '("delivered","cancelled")')
           .order("created_at", { ascending: false })
         
         if (activeError) {
           console.error("Error fetching active shipments:", activeError)
           setError("Failed to load active shipments")
-        } else {
-          setActiveShipments(activeData || [])
+          setLoading(false)
+          return
         }
-
+        
         // Fetch completed shipments (delivered or cancelled)
         const { data: completedData, error: completedError } = await supabase
           .from("shipments")
           .select("*")
-          .or("status.eq.delivered,status.eq.cancelled")
-          .order("updated_at", { ascending: false })
+          .eq("user_id", session.user.id)
+          .in("status", ["delivered", "cancelled"])
+          .order("created_at", { ascending: false })
         
         if (completedError) {
           console.error("Error fetching completed shipments:", completedError)
           setError("Failed to load completed shipments")
-        } else {
-          setCompletedShipments(completedData || [])
+          setLoading(false)
+          return
         }
-      } catch (err) {
-        console.error("Error in shipments fetch:", err)
+        
+        setActiveShipments(activeData || [])
+        setCompletedShipments(completedData || [])
+      } catch (error) {
+        console.error("Error fetching shipments:", error)
         setError("An unexpected error occurred")
       } finally {
         setLoading(false)
       }
     }
-
+    
     fetchShipments()
   }, [])
 
   // Helper to determine status color based on shipment status
-  const getStatusColor = (status) => {
+  const getStatusColor = (status: string | undefined) => {
     if (!status) return "bg-gray-100 text-gray-800"
     
     switch(status.toLowerCase()) {
@@ -92,7 +113,7 @@ export default function ShipmentsPage() {
   }
 
   // Format date helper
-  const formatDate = (dateString) => {
+  const formatDate = (dateString: string | undefined) => {
     if (!dateString) return "N/A"
     try {
       return format(new Date(dateString), 'MMM d, yyyy')
@@ -107,16 +128,16 @@ export default function ShipmentsPage() {
     (shipment) =>
       shipment?.tracking_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       shipment?.service_type?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment?.origin?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment?.destination?.toLowerCase().includes(searchQuery.toLowerCase())
+      shipment?.origin_text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.destination_text?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   const filteredCompletedShipments = completedShipments.filter(
     (shipment) =>
       shipment?.tracking_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       shipment?.service_type?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment?.origin?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      shipment?.destination?.toLowerCase().includes(searchQuery.toLowerCase())
+      shipment?.origin_text?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      shipment?.destination_text?.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   if (error) {

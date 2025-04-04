@@ -1,14 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ArrowLeft, CreditCard, AlertCircle } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { createClient } from '@/lib/supabase/client'
 import { generateTransactionReference, formatCurrency } from "@/lib/paystack"
 
 export default function FundWalletPage() {
@@ -17,7 +17,7 @@ export default function FundWalletPage() {
   const [userEmail, setUserEmail] = useState("")
   const router = useRouter()
   const { toast } = useToast()
-  const supabase = createClientComponentClient()
+  const supabase = createClient()
 
   // Predefined amounts
   const predefinedAmounts = [1000, 5000, 10000, 20000]

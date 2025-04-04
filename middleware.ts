@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 // import { cookies } from 'next/headers'
 import { roleMiddleware } from "./utils/auth/role-middleware";
+import { type User } from '@supabase/supabase-js'
 
 // Suppress the cookie parsing errors in the console
 const originalConsoleError = console.error;
@@ -155,99 +156,7 @@ export async function middleware(req: NextRequest) {
     }
   }
   
-  // Add Cookie Debugging
-  try {
-    console.log("COOKIE DEBUG: Auth cookies present:",
-      req.cookies.getAll().filter(c => c.name.includes('-auth-token'))
-        .map(c => `${c.name.substring(0, 30)}...=${c.value.substring(0, 10)}...`)
-    );
-    
-    // Inspect JWT token
-    const authCookie = req.cookies.get(`sb-${currentProjectRef}-auth-token`);
-    if (authCookie?.value) {
-      console.log("JWT_DEBUG - Inspecting auth token:");
-      debugJwtToken(authCookie.value);
-    } else {
-      console.log("JWT_DEBUG - No auth token cookie found");
-    }
-  } catch (e) {
-    console.error("COOKIE DEBUG: Error reading cookies", e);
-  }
-  
-  // Get the path requested
-  const { pathname } = req.nextUrl;
-  
-  // Declare variable to hold direct validation result
-  let directValidationSuccessful = false;
-  let directValidationUser = null;
-  
-  // Create a direct Supabase client with the raw token for token validation
-  const authCookie = req.cookies.get(`sb-${currentProjectRef}-auth-token`);
-  if (authCookie?.value) {
-    try {
-      // --- ADDED: Handle potential JSON array cookie format --- 
-      let tokenToValidate = authCookie.value;
-      if (tokenToValidate.startsWith('[') && tokenToValidate.endsWith(']')) {
-        try {
-          console.log("DIRECT_AUTH_DEBUG - Parsing JSON array cookie for token");
-          const parsed = JSON.parse(tokenToValidate);
-          if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-            tokenToValidate = parsed[0];
-            console.log("DIRECT_AUTH_DEBUG - Successfully extracted token from JSON array");
-          } else {
-            console.warn("DIRECT_AUTH_DEBUG - Parsed cookie was not a valid token array, attempting raw value");
-            // Keep original value if parsing fails or format is wrong
-          }
-        } catch (parseError) {
-          console.error("DIRECT_AUTH_DEBUG - Error parsing JSON cookie, attempting raw value:", parseError);
-          // Keep original value if parsing fails
-        }
-      }
-      // --- END ADDED --- 
-      
-      // Create a direct client with the token to validate using the service role key
-      const directClient = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!, // Use service role key instead
-        {
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false
-          }
-        }
-      );
-      
-      // Set the session manually - USE PARSED TOKEN
-      const { error: setSessionError } = await directClient.auth.setSession({
-        access_token: tokenToValidate, // Use the potentially parsed token
-        refresh_token: req.cookies.get(`sb-${currentProjectRef}-auth-token-refresh`)?.value || '',
-      });
-      
-      if (setSessionError) {
-        console.log("DIRECT_AUTH_DEBUG - Error setting session:", setSessionError.message);
-      } else {
-        // Get user to validate token
-        const { data: userData, error: userError } = await directClient.auth.getUser();
-        
-        if (userError) {
-          console.log("DIRECT_AUTH_DEBUG - Error getting user, token likely invalid:", userError.message);
-        } else if (userData.user) {
-          console.log("DIRECT_AUTH_DEBUG - Token is valid, user:", {
-            id: userData.user.id,
-            email: userData.user.email,
-            role: userData.user.role
-          });
-          // If we got here, set the validation as successful
-          directValidationSuccessful = true;
-          directValidationUser = userData.user;
-        }
-      }
-    } catch (error) {
-      console.error("DIRECT_AUTH_DEBUG - Error with direct validation:", error);
-    }
-  }
-  
-  // Create Supabase client using @supabase/ssr with direct request cookie access
+  // --- MOVED: Initialize Supabase client earlier --- 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -325,8 +234,29 @@ export async function middleware(req: NextRequest) {
       },
     }
   );
+  // --- END MOVED --- 
+
+  // Add Cookie Debugging
+  try {
+    console.log("COOKIE DEBUG: Auth cookies present:",
+      req.cookies.getAll().filter(c => c.name.includes('-auth-token'))
+        .map(c => `${c.name.substring(0, 30)}...=${c.value.substring(0, 10)}...`)
+    );
+    
+    // Inspect JWT token
+    const authCookie = req.cookies.get(`sb-${currentProjectRef}-auth-token`);
+    if (authCookie?.value) {
+      console.log("JWT_DEBUG - Inspecting auth token:");
+      debugJwtToken(authCookie.value);
+    } else {
+      console.log("JWT_DEBUG - No auth token cookie found");
+    }
+  } catch (e) {
+    console.error("COOKIE DEBUG: Error reading cookies", e);
+  }
   
-  // --- Early Exits (Before Session Check) ---
+  // Get the path requested
+  const { pathname } = req.nextUrl;
   
   // Skip middleware for most API routes
   if (pathname.startsWith('/api/')) {
@@ -384,7 +314,7 @@ export async function middleware(req: NextRequest) {
       // If no valid recovery cookies or session expired, proceed to normal auth check below
   }
   
-  // Check if the path is public
+  // Check if the path is public - DECLARE ONLY ONCE
   const isPublicPath = PUBLIC_PATHS.some(path => pathname.startsWith(path));
   if (isPublicPath) {
     console.log("Public path detected, skipping auth check, running getSession for potential refresh.");
@@ -416,79 +346,49 @@ export async function middleware(req: NextRequest) {
     return response; // Return the potentially modified response
   }
   
-  // --- Session Check and Handling ---
+  // --- Post-Authentication Logic --- 
   
-  // MODIFICATION: First check if direct validation was successful
-  if (directValidationSuccessful && directValidationUser) {
-    console.log("Direct validation successful, bypassing getSession check");
-    
-    // Check role-based permissions for admin paths
-    if (ADMIN_PATHS.some(path => pathname.startsWith(path))) {
-      console.log("Admin path detected, invoking role middleware");
-      return await roleMiddleware(req);
-    }
-    
-    // If not an admin path, allow access
-    console.log("Valid session (via direct validation), allowing access");
-    return response;
+  // Get USER data. This verifies the session with the server.
+  console.log("SUPABASE_DEBUG - About to call getUser()");
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  
+  if (userError) {
+      console.error("Supabase getUser Error:", userError.message);
+      // Fallthrough to check session object as fallback (getSession runs implicitly with getUser? check docs)
+      // Let\'s try relying solely on getUser for now.
   }
   
-  // Fall back to getSession for backward compatibility
-  console.log("SUPABASE_DEBUG - About to call getSession()");
-  const sessionResult = await supabase.auth.getSession();
-  
-  // Enhanced debugging for session data
-  console.log(`SUPABASE_DEBUG - getSession returned data: ${!!sessionResult.data}, error: ${!!sessionResult.error}`);
-  console.log("SUPABASE_DEBUG - Session structure:", JSON.stringify({
-    hasSession: !!sessionResult.data.session,
-    user: sessionResult.data.session ? {
-      id: sessionResult.data.session.user.id,
-      email: sessionResult.data.session.user.email,
-      role: sessionResult.data.session.user.role
-    } : null,
-    expires_at: sessionResult.data.session?.expires_at,
-    access_token_length: sessionResult.data.session?.access_token?.length || 0,
-    refresh_token_length: sessionResult.data.session?.refresh_token?.length || 0,
-  }));
-  
-  const { data: { session }, error } = sessionResult;
-  
-  // Log session status
-  console.log(`Session exists: ${!!session}`);
-  if (error) {
-      // Log the specific error for better debugging
-      console.error("Supabase getSession Error:", error.message);
+  // Log user status
+  console.log(`User exists: ${!!user}`);
+  if (user) {
+      console.log("SUPABASE_DEBUG - User details:", {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          // aud: user.aud, // Might not be needed
+          // created_at: user.created_at // Might not be needed
+      });
   }
   console.log("=================================");
   
-  // If no session, redirect to sign in
-  if (!session || !session.user || !session.access_token) {
-    console.log("SUPABASE_DEBUG - No valid session found. Reason:", 
-               !session ? "No session object" : 
-               !session.user ? "No user in session" : 
-               !session.access_token ? "No access token" : "Unknown");
+  // If no user found via getUser, redirect to sign in
+  if (!user) {
+    console.log("SUPABASE_DEBUG - No valid user found via getUser().");
     const redirectUrl = new URL('/auth/sign-in', req.url);
     redirectUrl.searchParams.set('redirectTo', req.nextUrl.pathname);
-    console.log(`No session, redirecting to ${redirectUrl.pathname}`);
-    // Return a new redirect response. The 'res' object contains potential Set-Cookie headers from getSession.
-    // We need to transfer those headers if any exist. A simple redirect might lose them.
-    // However, NextResponse.redirect itself handles this correctly usually.
+    console.log(`No user, redirecting to ${redirectUrl.pathname}`);
     return NextResponse.redirect(redirectUrl);
   }
   
-  // --- Post-Authentication Logic ---
-  
   // Check role-based permissions for admin paths
   if (ADMIN_PATHS.some(path => pathname.startsWith(path))) {
-    console.log("Admin path detected, invoking role middleware");
-    // Revert to original call signature. roleMiddleware will be refactored 
-    // to use @supabase/ssr and handle cookies independently.
-    return await roleMiddleware(req);
+    console.log("Admin path detected, invoking role middleware with user object");
+    // Pass the validated user object to roleMiddleware
+    return await roleMiddleware(req, response, user); // Pass user and response
   }
   
   // If session exists and it's not an admin path, allow access.
-  // IMPORTANT: Return the 'res' object potentially modified by Supabase.
-  console.log("Valid session, allowing access");
+  console.log("Valid user, allowing access");
   return response;
 }
 

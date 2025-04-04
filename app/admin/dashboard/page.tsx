@@ -11,7 +11,7 @@ import {
   CheckCircle,
   AlertTriangle
 } from "lucide-react"
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -31,7 +31,7 @@ export default function AdminDashboard() {
   })
 
   // Create a standard client (with user's permissions)
-  const supabase = createClientComponentClient<Database>()
+  const supabase = createClient()
   
   // Force count all users (admin operation - will still respect RLS)
   const countAllUsers = async () => {

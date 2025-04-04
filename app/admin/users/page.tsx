@@ -10,7 +10,7 @@ import {
   ChevronRight,
   Filter 
 } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -77,6 +77,7 @@ export default function UsersManagement() {
         // Don't fetch roles from database, use preset roles instead
         setAvailableRoles(PRESET_ROLES)
         
+        const supabase = createClient();
         // Fetch profiles data
         const { data: profiles, error: profilesError } = await supabase
           .from('profiles')
@@ -208,7 +209,7 @@ export default function UsersManagement() {
       setUsers(updatedUsers)
       toast({
         title: "Success",
-        description: `User role updated to ${selectedRole}`,
+        description: `User role updated to ${selectedRole}`
       })
       
       setIsDialogOpen(false)

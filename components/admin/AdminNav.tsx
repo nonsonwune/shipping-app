@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { 
   LogOut, Package, Settings, BarChart3, Users, 
@@ -12,7 +12,7 @@ import {
 export default function AdminNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClientComponentClient();
+  const supabase = createClient();
 
   const isActive = (path: string) => {
     return pathname === path || pathname?.startsWith(`${path}/`);

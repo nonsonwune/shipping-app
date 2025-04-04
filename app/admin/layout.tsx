@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import { Database } from '@/types/supabase';
 import AdminNav from '../../components/admin/AdminNav';
 import AdminHeader from '../../components/admin/AdminHeader';
@@ -23,7 +23,7 @@ export default function AdminLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClientComponentClient<Database>();
+  const supabase = createBrowserClient();
   const sessionChecked = useRef(false);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
