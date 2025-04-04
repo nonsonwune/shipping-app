@@ -171,6 +171,14 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
           
+          <Card className="cursor-pointer" onClick={() => router.push('/shipments')}>
+            <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+              <Truck className="h-10 w-10 mb-3 text-blue-500" />
+              <h3 className="font-medium">Shipments</h3>
+              <p className="text-sm text-gray-500 mt-1">View all shipments</p>
+            </CardContent>
+          </Card>
+          
           <Card className="cursor-pointer" onClick={() => router.push('/wallet')}>
             <CardContent className="flex flex-col items-center justify-center p-4 text-center">
               <Wallet className="h-10 w-10 mb-3 text-blue-500" />
