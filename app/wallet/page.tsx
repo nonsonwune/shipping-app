@@ -204,8 +204,8 @@ function WalletContent() {
       
       console.log("DEBUG: get_or_create_wallet response:", walletData);
       
-      // Set the wallet balance
-      setBalance(walletData?.balance || 0);
+      // Set the wallet balance (Access the first element of the array)
+      setBalance(walletData?.[0]?.balance || 0);
       console.log("Wallet data retrieved successfully:", walletData);
 
       // Fetch transactions
@@ -224,7 +224,7 @@ function WalletContent() {
       setTransactions(transactionsData || []);
       
       console.log("Wallet data fetched successfully", { 
-        balance: walletData?.balance,
+        balance: walletData?.[0]?.balance,
         transactionsCount: transactionsData?.length || 0
       });
     } catch (error) {
