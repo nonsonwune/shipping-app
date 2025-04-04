@@ -190,6 +190,7 @@ function WalletContent() {
       console.log("DEBUG: Fetching wallet data for user", session.user.id);
       
       // Use an upsert approach - create the wallet if it doesn't exist or return the existing one
+      console.log("DEBUG: Calling get_or_create_wallet RPC function...");
       const { data: walletData, error: walletError } = await supabase
         .rpc('get_or_create_wallet', {
           user_id_param: session.user.id
@@ -200,6 +201,8 @@ function WalletContent() {
         setIsLoading(false);
         return;
       }
+      
+      console.log("DEBUG: get_or_create_wallet response:", walletData);
       
       // Set the wallet balance
       setBalance(walletData?.balance || 0);
