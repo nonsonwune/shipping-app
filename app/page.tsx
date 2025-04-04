@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button"
 import StatCard from "@/components/stat-card"
 import ActionCard from "@/components/action-card"
 import { Globe, Package, FileText, MapPin, Wallet, Truck } from "lucide-react"
-import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 import type { User } from "@supabase/supabase-js"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { createClient as createBrowserClient } from "@/lib/supabase/client"
 
 // Define UserProfile type if not already imported
 type UserProfile = {
@@ -38,23 +38,88 @@ export default function Home() {
     deliveredThisMonth: 0
   })
 
+  // Helper function to properly get cookie value by name
+  const getCookieValue = (name: string): string | null => {
+    if (typeof document === 'undefined') return null;
+    
+    const cookies = document.cookie.split(';').map(c => c.trim());
+    for (const cookie of cookies) {
+      if (cookie.startsWith(name + '=')) {
+        // Get everything after the first '=' character
+        const value = cookie.substring(name.length + 1);
+        console.log(`Found cookie ${name}, raw value length:`, value.length);
+        try {
+          // Try to decode URI component in case it's encoded
+          return decodeURIComponent(value);
+        } catch (e) {
+          console.error(`Error decoding cookie ${name}:`, e);
+          return value; // Return raw value if decoding fails
+        }
+      }
+    }
+    return null;
+  };
+
   useEffect(() => {
     async function getProfile() {
       // Add check for supabase client (though likely unnecessary with direct import)
-      if (!supabase) {
-          console.error("Supabase client is not available.");
-          setLoading(false);
-          return;
-      }
+      const supabase = createBrowserClient(); // Use the correct client
       
       try {
+        console.log("Checking for existing session on page load");
+        
         // Get the current session
         const sessionResponse = await supabase.auth.getSession(); // Removed ?. as direct import should guarantee non-null
-        if (sessionResponse.error || !sessionResponse.data.session) {
-            console.error("Failed to get session or no session:", sessionResponse.error);
+        
+        // Log the actual session response for debugging
+        console.log("Session response:", {
+          hasData: !!sessionResponse.data,
+          hasSession: !!(sessionResponse.data && sessionResponse.data.session),
+          hasError: !!sessionResponse.error,
+          errorMessage: sessionResponse.error?.message
+        });
+        
+        if (sessionResponse.error) {
+            console.error("Session error:", sessionResponse.error);
             router.push("/auth/sign-in");
             return;
         }
+        
+        if (!sessionResponse.data.session) {
+            console.error("No session found via getSession()");
+            
+            // Try to recover session using direct validation via API call
+            // console.log("Attempting session recovery via API token validation");
+            
+            // We don\'t need to check cookies here directly, the API call will handle it
+            
+            // Try to validate the token directly using the API endpoint
+            // REMOVED - Rely on @supabase/ssr getSession
+            // const validUser = await validateTokenDirectly();
+            
+            // if (validUser) {
+            //   console.log("Direct token validation successful via API, proceeding with user:", validUser.id);
+              
+            //   // Set user state
+            //   setUser(validUser);
+              
+            //   // Create a minimal profile from user data
+            //   const userProfile = {
+            //     id: validUser.id,
+            //     first_name: validUser.user_metadata?.first_name || validUser.user_metadata?.name || "User",
+            //     last_name: validUser.user_metadata?.last_name || "",
+            //     email: validUser.email || "",
+            //     wallet_balance: 0,
+            //   };
+            //   setProfile(userProfile);
+            // } else {
+              // If no session and direct validation failed, redirect to sign-in
+              console.error("Session check failed, redirecting to sign-in.");
+              router.push('/auth/sign-in'); 
+            // }
+            return; // Stop execution after handling the no-session case
+        }
+        
         const { data: { session } } = sessionResponse; // Destructure after check
 
         // Store user data
@@ -90,91 +155,99 @@ export default function Home() {
           setProfile(userProfile); // Fallback
         }
         
-        // Fetch wallet balance from wallets table
-        try {
-          const walletResponse = await supabase // Removed ?. 
-            .from("wallets")
-            .select("balance")
-            .eq("user_id", session.user.id)
-            .maybeSingle();
-            
-          if (walletResponse?.data) {
-            console.log("Wallet data retrieved:", walletResponse.data);
-            setWalletBalance(walletResponse.data.balance || 0);
-          } else {
-            console.log("No wallet found or error fetching wallet", walletResponse?.error);
-            setWalletBalance(0);
-          }
-          // Error logging was already handled essentially
-        } catch (walletCatchError) {
-          console.error("Error fetching wallet (catch block):", walletCatchError);
-          setWalletBalance(0); // Ensure balance is reset on error
-        }
+        await loadUserData(session.user.id);
         
-        // Fetch recent shipments
-        try {
-          const shipmentsResponse = await supabase // Removed ?. 
-            .from("shipments")
-            .select("*, shipment_items(*)") // Also fetch related items
-            .order("created_at", { ascending: false })
-            .limit(5);
-            
-          if (shipmentsResponse?.error) {
-            console.error("Error fetching shipments:", shipmentsResponse.error);
-          } else if (shipmentsResponse?.data) {
-            // Assuming Shipment type includes status and created_at
-            const shipmentsData = shipmentsResponse.data as any[]; // Use any or define a proper Shipment type
-            setShipments(shipmentsData);
-            
-            // Calculate shipment stats - Add types to filter params
-            const active = shipmentsData.filter((s: any) => 
-              s.status && ['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())
-            ).length;
-            
-            const delivered = shipmentsData.filter((s: any) => 
-              s.status && s.status.toLowerCase() === 'delivered'
-            ).length;
-            
-            // Calculate dates for this week and month
-            const now = new Date();
-            const startOfWeek = new Date(now);
-            startOfWeek.setDate(now.getDate() - now.getDay()); // Start of current week (Sunday)
-            startOfWeek.setHours(0, 0, 0, 0);
-            
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // Start of current month
-            
-            // Count shipments for this week and month - Add types to filter params
-            const activeThisWeek = shipmentsData.filter((s: any) => {
-              if (!s.status || !['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())) return false;
-              const shipmentDate = new Date(s.created_at);
-              return shipmentDate >= startOfWeek;
-            }).length;
-            
-            const deliveredThisMonth = shipmentsData.filter((s: any) => {
-              if (!s.status || s.status.toLowerCase() !== 'delivered') return false;
-              const shipmentDate = new Date(s.created_at);
-              return shipmentDate >= startOfMonth;
-            }).length;
-            
-            setShipmentStats({
-              active,
-              delivered,
-              activeThisWeek,
-              deliveredThisMonth
-            });
-          }
-        } catch (shipmentsCatchError) {
-          console.error("Error fetching shipments (catch block):", shipmentsCatchError);
-        }
       } catch (error) {
         console.error("Dashboard error:", error);
       } finally {
         setLoading(false);
       }
     }
+    
+    // Helper function to load wallet and shipment data
+    async function loadUserData(userId: string) {
+      // Check for Supabase client
+      const supabase = createBrowserClient(); // Use the correct client
+
+      // Fetch wallet balance from wallets table
+      try {
+        const walletResponse = await supabase
+          .from("wallets")
+          .select("balance")
+          .eq("user_id", userId)
+          .maybeSingle();
+            
+        if (walletResponse?.data) {
+          console.log("Wallet data retrieved:", walletResponse.data);
+          setWalletBalance(walletResponse.data.balance || 0);
+        } else {
+          console.log("No wallet found or error fetching wallet", walletResponse?.error);
+          setWalletBalance(0);
+        }
+      } catch (walletCatchError) {
+        console.error("Error fetching wallet (catch block):", walletCatchError);
+        setWalletBalance(0); // Ensure balance is reset on error
+      }
+        
+      // Fetch recent shipments
+      try {
+        const shipmentsResponse = await supabase
+          .from("shipments")
+          .select("*, shipment_items(*)") // Also fetch related items
+          .order("created_at", { ascending: false })
+          .limit(5);
+            
+        if (shipmentsResponse?.error) {
+          console.error("Error fetching shipments:", shipmentsResponse.error);
+        } else if (shipmentsResponse?.data) {
+          // Assuming Shipment type includes status and created_at
+          const shipmentsData = shipmentsResponse.data as any[]; // Use any or define a proper Shipment type
+          setShipments(shipmentsData);
+            
+          // Calculate shipment stats - Add types to filter params
+          const active = shipmentsData.filter((s: any) => 
+            s.status && ['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())
+          ).length;
+            
+          const delivered = shipmentsData.filter((s: any) => 
+            s.status && s.status.toLowerCase() === 'delivered'
+          ).length;
+            
+          // Calculate dates for this week and month
+          const now = new Date();
+          const startOfWeek = new Date(now);
+          startOfWeek.setDate(now.getDate() - now.getDay()); // Start of current week (Sunday)
+          startOfWeek.setHours(0, 0, 0, 0);
+            
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // Start of current month
+            
+          // Count shipments for this week and month - Add types to filter params
+          const activeThisWeek = shipmentsData.filter((s: any) => {
+            if (!s.status || !['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())) return false;
+            const shipmentDate = new Date(s.created_at);
+            return shipmentDate >= startOfWeek;
+          }).length;
+            
+          const deliveredThisMonth = shipmentsData.filter((s: any) => {
+            if (!s.status || s.status.toLowerCase() !== 'delivered') return false;
+            const shipmentDate = new Date(s.created_at);
+            return shipmentDate >= startOfMonth;
+          }).length;
+            
+          setShipmentStats({
+            active,
+            delivered,
+            activeThisWeek,
+            deliveredThisMonth
+          });
+        }
+      } catch (shipmentsCatchError) {
+        console.error("Error fetching shipments (catch block):", shipmentsCatchError);
+      }
+    }
 
     getProfile();
-  }, [router, supabase]); // Add supabase to dependency array if it's stable
+  }, [router]); // Removed supabase from dependency array as createBrowserClient creates singleton
 
   // Helper function to get display name from profile
   const getDisplayName = () => {

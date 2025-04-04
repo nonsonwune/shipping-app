@@ -1,4 +1,9 @@
 /**
+ * ⚠️ DEPRECATED: This file uses the older @supabase/auth-helpers-nextjs library.
+ * Do not use for new code. Imports should be made directly from the functions
+ * exported in the `lib/supabase/` directory (e.g., `lib/supabase/client.ts`,
+ * `lib/supabase/server.ts`) which use the newer `@supabase/ssr` library.
+ *
  * Supabase client exports (BROWSER-SAFE)
  * 
  * ⚠️ WARNING: This file is being refactored to the lib/supabase/ folder structure.
@@ -7,23 +12,70 @@
 
 // Only include browser-safe imports 
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { StorageAdapter } from '@supabase/auth-helpers-shared'
 import type { Database } from '@/types/supabase'
+import { createClient } from '@supabase/supabase-js'
 
 // Environment variables that are safe for client use
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 // Singleton instance for client components
 let clientInstance: ReturnType<typeof createClientComponentClient<Database>> | null = null
+// Track the URL that was used to create the instance for proper reinitialization if needed
+let instanceUrl: string | null = null
 
 /**
  * Creates a Supabase client for client components with singleton pattern
  * Use this in client components (React components with 'use client')
  */
 export function createBrowserClient() {
-  if (clientInstance) return clientInstance
+  // Get the current Supabase URL and key
+  const currentUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const currentKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   
-  clientInstance = createClientComponentClient<Database>()
+  // If URL has changed or we don't have an instance, create a new one
+  if (!clientInstance || instanceUrl !== currentUrl) {
+    console.log(`Creating new Supabase client instance with URL: ${currentUrl.substring(0, 30)}...`);
+    instanceUrl = currentUrl;
+    
+    // Check for existing auth cookies
+    if (typeof document !== 'undefined') {
+      console.log("Browser client checking for existing auth cookies");
+      const cookies = document.cookie.split(';').map(c => c.trim());
+      const authCookies = cookies.filter(c => c.startsWith('sb-') && c.includes('-auth-token'));
+      console.log(`Found ${authCookies.length} auth cookies:`, 
+        authCookies.map(c => c.split('=')[0])
+      );
+    }
+    
+    // Create with proper auth settings
+    clientInstance = createClientComponentClient<Database>({
+      supabaseUrl: currentUrl,
+      supabaseKey: currentKey,
+    });
+    
+    // Initialize the client with a session check
+    if (typeof window !== 'undefined' && clientInstance) {
+      // Immediately check for a session on client creation
+      clientInstance.auth.getSession().then(({ data, error }) => {
+        if (error) {
+          console.error("Browser client session initialization error:", error);
+        } else {
+          console.log("Browser client session initialized:", {
+            hasSession: !!data.session,
+            user: data.session ? {
+              id: data.session.user.id,
+              email: data.session.user.email,
+              expires_at: data.session.expires_at
+            } : null
+          });
+        }
+      });
+    }
+  }
+  
   return clientInstance
 }
 
@@ -154,4 +206,22 @@ export type UserProfile = {
   phone?: string
   account_type?: string
   email?: string
+}
+
+// Add this function to create a server client with JWT verification
+export function createServerComponentClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  const supabaseServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!
+  
+  return createClient<Database>(
+    supabaseUrl,
+    supabaseServiceRole,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  )
 }

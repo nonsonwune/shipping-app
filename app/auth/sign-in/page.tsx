@@ -10,7 +10,60 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Eye, EyeOff } from "lucide-react"
-import { createBrowserClient } from "@/lib/supabase"
+import { createClient as createBrowserClient } from "@/lib/supabase/client"
+
+// Helper function to debug JWT tokens client-side
+function debugJwtToken(token: string) {
+  try {
+    if (!token) {
+      console.log("CLIENT_JWT_DEBUG - Token is empty");
+      return;
+    }
+    
+    // Split the token into its 3 parts
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      console.log(`CLIENT_JWT_DEBUG - Invalid token format, has ${parts.length} parts instead of 3`);
+      return;
+    }
+    
+    // Decode header
+    try {
+      const headerB64 = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+      const headerStr = atob(headerB64);
+      const header = JSON.parse(headerStr);
+      console.log("CLIENT_JWT_DEBUG - Header:", header);
+    } catch (e) {
+      console.log("CLIENT_JWT_DEBUG - Could not decode header:", e);
+    }
+    
+    // Decode payload
+    try {
+      const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payloadStr = atob(payloadB64);
+      const payload = JSON.parse(payloadStr);
+      console.log("CLIENT_JWT_DEBUG - Payload:", {
+        ...payload,
+        // Remove sensitive parts from logging
+        sub: payload.sub ? "PRESENT" : "MISSING",
+        email: payload.email ? "PRESENT" : "MISSING", 
+        exp: payload.exp,
+        iat: payload.iat,
+        // Check if token is expired
+        isExpired: payload.exp ? (payload.exp * 1000 < Date.now()) : "No expiry"
+      });
+      
+      // Explicitly check expiration
+      if (payload.exp && payload.exp * 1000 < Date.now()) {
+        console.log(`CLIENT_JWT_DEBUG - TOKEN EXPIRED at ${new Date(payload.exp * 1000).toISOString()}, current time is ${new Date().toISOString()}`);
+      }
+    } catch (e) {
+      console.log("CLIENT_JWT_DEBUG - Could not decode payload:", e);
+    }
+  } catch (error) {
+    console.error("CLIENT_JWT_DEBUG - Error inspecting token:", error);
+  }
+}
 
 export default function SignInPage() {
   const router = useRouter()
@@ -30,8 +83,13 @@ export default function SignInPage() {
         console.log("Checking for existing session on page load");
         setCheckingSession(true);
         
+        // ADDED: Clear stale cookies from other Supabase projects
+        clearStaleSupabaseCookies();
+        
         // Create client and check for active session
         const supabase = createBrowserClient();
+        
+        // First try the standard getSession approach
         const { data } = await supabase.auth.getSession();
         const session = data.session;
         console.log("Session check result:", session ? "Session exists" : "No session");
@@ -42,9 +100,48 @@ export default function SignInPage() {
           return;
         }
         
-        // Log cookies for debugging
+        // If no session from getSession, look for auth cookies that might be valid
+        // but not properly recognized by getSession
+        // REMOVED - No longer needed with unified @supabase/ssr handling
+        /*
         const cookies = document.cookie.split(';').map(c => c.trim());
+        const authCookiePrefix = 'sb-rtbqpprntygrgxopxoei-auth-token=';
+        const authCookie = cookies.find(c => c.startsWith(authCookiePrefix));
         console.log("Current cookies:", cookies);
+        
+        if (authCookie) {
+          // Extract token from cookie
+          const token = authCookie.substring(authCookiePrefix.length);
+          console.log("Found auth token cookie, checking validity");
+          
+          // Debug the token
+          debugJwtToken(token);
+          
+          try {
+            // Try to fetch user profile with the token
+            const response = await fetch('/api/auth/test-token', {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              credentials: 'include'
+            });
+            
+            const result = await response.json();
+            console.log("Token validation result:", result);
+            
+            if (response.ok && result.valid) {
+              console.log("Token is valid according to direct validation, redirecting");
+              window.location.href = "/";
+              return;
+            } else {
+              console.log("Token is invalid according to direct validation, staying on login page");
+            }
+          } catch (error) {
+            console.error("Error validating token:", error);
+          }
+        }
+        */
       } catch (err) {
         console.error("Error checking session:", err);
       } finally {
@@ -55,17 +152,72 @@ export default function SignInPage() {
     checkSession();
   }, []);
 
+  // ADDED: Function to clear stale Supabase cookies from other projects
+  const clearStaleSupabaseCookies = () => {
+    try {
+      console.log("Clearing stale Supabase cookies");
+      const currentProjectRef = "rtbqpprntygrgxopxoei"; // Your current Supabase project ref
+      
+      // Get all cookies
+      const cookies = document.cookie.split(';');
+      
+      // Find and clear any Supabase auth cookies from other projects
+      cookies.forEach(cookie => {
+        const trimmedCookie = cookie.trim();
+        const [name] = trimmedCookie.split('=');
+        
+        if (name && name.includes('-auth-token')) {
+          // Extract project ref from cookie name (sb-{projectRef}-auth-token)
+          const parts = name.split('-');
+          if (parts.length >= 3 && parts[0] === 'sb') {
+            const cookieProjectRef = parts[1];
+            
+            // If this is not our current project, clear the cookie
+            if (cookieProjectRef !== currentProjectRef) {
+              console.log(`Clearing stale cookie from project: ${cookieProjectRef}`);
+              // Clear the cookie by setting expired date
+              document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;`;
+              
+              // Also clear any localStorage items for this project
+              const localStorageKey = `sb-${cookieProjectRef}-auth-token`;
+              if (localStorage.getItem(localStorageKey)) {
+                console.log(`Clearing stale localStorage item: ${localStorageKey}`);
+                localStorage.removeItem(localStorageKey);
+              }
+            }
+          }
+        }
+      });
+      
+      console.log("Finished clearing stale cookies");
+    } catch (error) {
+      console.error("Error clearing stale cookies:", error);
+    }
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setDebugInfo(null)
     setLoading(true)
     
+    // ADDED: Clear stale cookies before signing in
+    clearStaleSupabaseCookies();
+    
     console.log("Sign-in attempt started with email:", email)
 
     try {
       console.log("Calling supabase.auth.signInWithPassword with:", { email })
       const supabase = createBrowserClient();
+      
+      // Explicitly log out first to clear any potential stale session state
+      console.log("Explicitly signing out first to ensure clean state");
+      await supabase.auth.signOut();
+      
+      // Sign in with a small delay to ensure previous signout has processed
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      console.log("Now attempting to sign in");
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -85,19 +237,41 @@ export default function SignInPage() {
       } : 'No user data')
       
       console.log("Session data:", data.session ? {
-        access_token: !!data.session.access_token,
-        refresh_token: !!data.session.refresh_token,
+        access_token: data.session.access_token ? `${data.session.access_token.substring(0, 10)}...` : null,
+        refresh_token: data.session.refresh_token ? `${data.session.refresh_token.substring(0, 10)}...` : null,
         expires_at: data.session.expires_at
       } : 'No session data')
 
       if (data.user && data.session) {
         console.log("User authenticated successfully");
         
+        // Debug JWT token data
+        if (data.session.access_token) {
+          console.log("Debugging access token from successful login:");
+          debugJwtToken(data.session.access_token);
+        }
+        
+        // Double-check session via getSession to ensure it was saved properly
+        console.log("Verifying session was properly saved via getSession");
+        const sessionCheck = await supabase.auth.getSession();
+        console.log("getSession result:", sessionCheck.data.session ? "Session exists" : "No session");
+        
+        // Debug getSession response
+        if (sessionCheck.data.session) {
+          console.log("Session after getSession:", {
+            user: sessionCheck.data.session.user ? "Present" : "Missing",
+            access_token: sessionCheck.data.session.access_token ? "Present" : "Missing",
+            refresh_token: sessionCheck.data.session.refresh_token ? "Present" : "Missing"
+          });
+        } else {
+          console.log("No session returned from getSession");
+        }
+        
         // Set debug info to show success
         setDebugInfo("Authentication successful! Redirecting to dashboard...");
         
-        // Wait briefly to ensure session data is properly stored
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait a bit longer to ensure session data is properly stored
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
         // Force a hard reload to ensure the browser picks up the new session
         window.location.href = "/";

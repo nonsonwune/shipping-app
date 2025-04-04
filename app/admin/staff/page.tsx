@@ -137,55 +137,35 @@ export default function StaffManagement() {
     setFormSubmitting(true);
 
     try {
-      // Check if email already exists
-      const { data: existingUser } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('email', formData.email)
-        .single();
+      // Call the backend API route
+      const response = await fetch('/api/admin/staff', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
 
-      if (existingUser) {
-        toast({
-          title: 'Error',
-          description: 'A user with this email already exists',
-          variant: 'destructive',
-        });
-        return;
+      const result = await response.json();
+
+      if (!response.ok) {
+        // Throw an error with the message from the API route
+        throw new Error(result.error || `HTTP error! status: ${response.status}`);
       }
 
-      // Create the user in auth
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: formData.email,
-        password: Math.random().toString(36).slice(-8), // Generate random temporary password
-        email_confirm: true,
-      });
-
-      if (authError) throw authError;
-
-      // Create profile
-      const userId = authData.user.id;
-      const { error: profileError } = await supabase.from('profiles').insert({
-        id: userId,
-        email: formData.email,
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        phone: formData.phone,
-        account_type: formData.account_type,
-      });
-
-      if (profileError) throw profileError;
-
-      await fetchStaff();
+      // Success
+      await fetchStaff(); // Refresh the staff list
       toast({
         title: 'Success',
-        description: 'Staff member added successfully',
+        description: result.message || 'Staff member added successfully',
       });
       setShowAddDialog(false);
       resetForm();
+
     } catch (error: any) {
       console.error('Error adding staff:', error);
       toast({
-        title: 'Error',
+        title: 'Error Adding Staff',
         description: error.message || 'Failed to add staff member',
         variant: 'destructive',
       });
