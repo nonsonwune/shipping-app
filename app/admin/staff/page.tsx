@@ -295,7 +295,7 @@ export default function StaffManagement() {
                     id="email"
                     name="email"
                     type="email"
-                    value={formData.email}
+                    value={formData.email ?? ''}
                     onChange={handleInputChange}
                     required
                     className="col-span-3"
@@ -306,7 +306,7 @@ export default function StaffManagement() {
                   <Input
                     id="first_name"
                     name="first_name"
-                    value={formData.first_name}
+                    value={formData.first_name ?? ''}
                     onChange={handleInputChange}
                     required
                     className="col-span-3"
@@ -317,7 +317,7 @@ export default function StaffManagement() {
                   <Input
                     id="last_name"
                     name="last_name"
-                    value={formData.last_name}
+                    value={formData.last_name ?? ''}
                     onChange={handleInputChange}
                     required
                     className="col-span-3"
@@ -328,7 +328,7 @@ export default function StaffManagement() {
                   <Input
                     id="phone"
                     name="phone"
-                    value={formData.phone}
+                    value={formData.phone ?? ''}
                     onChange={handleInputChange}
                     className="col-span-3"
                   />
@@ -391,7 +391,7 @@ export default function StaffManagement() {
                   <Label htmlFor="edit_email" className="text-right">Email</Label>
                   <Input
                     id="edit_email"
-                    value={formData.email}
+                    value={formData.email ?? ''}
                     disabled
                     className="col-span-3 bg-gray-100"
                   />
@@ -401,7 +401,7 @@ export default function StaffManagement() {
                   <Input
                     id="edit_first_name"
                     name="first_name"
-                    value={formData.first_name}
+                    value={formData.first_name ?? ''}
                     onChange={handleInputChange}
                     required
                     className="col-span-3"
@@ -412,7 +412,7 @@ export default function StaffManagement() {
                   <Input
                     id="edit_last_name"
                     name="last_name"
-                    value={formData.last_name}
+                    value={formData.last_name ?? ''}
                     onChange={handleInputChange}
                     required
                     className="col-span-3"
@@ -423,7 +423,7 @@ export default function StaffManagement() {
                   <Input
                     id="edit_phone"
                     name="phone"
-                    value={formData.phone}
+                    value={formData.phone ?? ''}
                     onChange={handleInputChange}
                     className="col-span-3"
                   />

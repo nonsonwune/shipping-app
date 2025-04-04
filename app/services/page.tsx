@@ -497,14 +497,14 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
 
           <Button className="bg-[#FFD60A] text-blue-950 hover:bg-[#FFD60A]/90 mb-6 w-full">Contact Sales</Button>
 
-          <div className="grid grid-cols-2 gap-2 mb-6">
+          <div className="flex justify-start gap-2 mb-6">
             <Link href="/services?type=import">
-              <Button variant={type === "import" ? "default" : "outline"} className={`w-full ${type === "import" ? "bg-blue-600 text-white" : "border-blue-600 text-blue-600"}`}>
+              <Button variant={type === "import" ? "default" : "outline"} className={`${type === "import" ? "bg-blue-600 text-white" : "border-blue-600 text-blue-600"}`}>
                 Import
               </Button>
             </Link>
             <Link href="/services?type=export">
-              <Button variant={type === "export" ? "default" : "outline"} className={`w-full ${type === "export" ? "bg-blue-600 text-white" : "border-blue-600 text-blue-600"}`}>
+              <Button variant={type === "export" ? "default" : "outline"} className={`${type === "export" ? "bg-blue-600 text-white" : "border-blue-600 text-blue-600"}`}>
                 Export
               </Button>
             </Link>
