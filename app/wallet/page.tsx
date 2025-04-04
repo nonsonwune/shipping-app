@@ -198,8 +198,38 @@ function WalletContent() {
 
       if (walletError) {
         console.error("Error fetching wallet:", walletError);
-        setIsLoading(false);
-        return;
+        
+        // Check if the error is because the wallet doesn't exist
+        if (walletError.code === 'PGRST116' || walletError.message.includes('contains 0 rows')) {
+          console.log("Wallet not found, creating a new wallet for user", session.user.id);
+          
+          // Create a new wallet with 0 balance
+          const { data: newWallet, error: createError } = await supabase
+            .from('wallets')
+            .insert({
+              user_id: session.user.id,
+              balance: 0,
+              currency: 'NGN'
+            })
+            .select('balance')
+            .single();
+          
+          if (createError) {
+            console.error("Error creating wallet:", createError);
+            setIsLoading(false);
+            return;
+          }
+          
+          console.log("New wallet created successfully:", newWallet);
+          setBalance(newWallet?.balance || 0);
+        } else {
+          // For other types of errors, just return
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        // If wallet exists, set the balance
+        setBalance(walletData?.balance || 0);
       }
 
       // Fetch transactions
@@ -215,7 +245,6 @@ function WalletContent() {
       }
 
       // Update state with fetched data
-      setBalance(walletData?.balance || 0);
       setTransactions(transactionsData || []);
       
       console.log("Wallet data retrieved:", walletData);
