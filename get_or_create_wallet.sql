@@ -13,7 +13,7 @@ DECLARE
   wallet_record RECORD;
 BEGIN
   -- First try to get the existing wallet
-  SELECT * INTO wallet_record FROM public.wallets WHERE user_id = user_id_param;
+  SELECT * INTO wallet_record FROM public.wallets w WHERE w.user_id = user_id_param;
 
   -- If wallet doesn't exist, create a new one
   IF wallet_record IS NULL THEN
