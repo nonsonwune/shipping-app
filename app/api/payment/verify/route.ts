@@ -667,6 +667,26 @@ export async function GET(request: NextRequest) {
     console.log(`[${requestId}] Payment verification flow completed successfully`);
     console.log("=========================");
 
+    // --- Refresh Supabase Session Before Redirect ---
+    try {
+        console.log(`[${requestId}] Attempting to refresh Supabase session before redirect...`);
+        const routeHandlerClient = createRouteHandlerClient({ cookies });
+        const { error: sessionError } = await routeHandlerClient.auth.getSession();
+        if (sessionError) {
+            console.warn(`[${requestId}] Non-fatal error refreshing session (might cause issues on redirect):`, sessionError.message);
+        } else {
+            console.log(`[${requestId}] Supabase session potentially refreshed/validated.`);
+        }
+        // The createRouteHandlerClient and getSession() should automatically handle setting the necessary
+        // Set-Cookie headers on the response object if the session was refreshed.
+    } catch (e) {
+        console.error(`[${requestId}] Unexpected error during session refresh attempt:`, e);
+    }
+    // --- End Session Refresh ---
+
+    // NOTE: We might not need the manual recovery cookies anymore if this works reliably.
+    // For now, we leave them as a potential backup.
+    
     return response;
 
   } catch (error) {
