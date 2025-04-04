@@ -17,7 +17,7 @@ import {
   Gift,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
-import { createBrowserClient, safeQuerySingle } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
 import type { Database } from "@/types/supabase"
 
@@ -27,7 +27,7 @@ export default function AccountPage() {
   const router = useRouter()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
-  const [supabase, setSupabase] = useState(createBrowserClient())
+  const [supabase, setSupabase] = useState(createClient())
 
   useEffect(() => {
     async function getProfile() {
@@ -45,16 +45,15 @@ export default function AccountPage() {
         }
 
         const currentUserId = session.user.id;
-        const { data, error } = await safeQuerySingle(
-          supabase,
-          "profiles",
-          "first_name, last_name, username",
-          { id: currentUserId }
-        )
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("first_name, last_name, username")
+          .eq("id", currentUserId)
+          .single();
 
         if (error) {
           if (error.code === 'PGRST116') {
-             console.error("Account page: Possible RLS issue preventing SELECT or table/column doesn't exist?");
+             console.error("Account page: Possible RLS issue preventing SELECT or column doesn't exist?");
           }
           throw error
         }
@@ -72,7 +71,7 @@ export default function AccountPage() {
   }, [router, supabase]);
 
   const handleSignOut = async () => {
-    const supabase = createBrowserClient();
+    const supabase = createClient();
     await supabase.auth.signOut()
     router.push("/auth/sign-in")
   }

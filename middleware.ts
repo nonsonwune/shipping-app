@@ -170,27 +170,39 @@ export async function middleware(req: NextRequest) {
       cookies: {
         async get(name: string) {
           try {
-            // Use req.cookies directly instead of cookieStore
             const value = req.cookies.get(name)?.value;
-            
-            // Debug line - log every cookie access
             console.log(`COOKIE_DEBUG - Reading cookie: ${name}, Raw value exists: ${!!value}`);
-            
             if (!value) return undefined;
-            
-            // Debug line - log raw value substring
-            if (value.length > 20) {
-              console.log(`COOKIE_DEBUG - Raw value (truncated): ${value.substring(0, 20)}...`);
-            } else {
-              console.log(`COOKIE_DEBUG - Raw value: ${value}`);
-            }
-            
-            // Handle JSON-formatted cookies (when token is stored as a JSON array)
-            if (value.startsWith('[') && value.endsWith(']')) {
+
+            // --- START FIX for base64 prefix & DECODING ---
+            let processedValue = value;
+            if (processedValue.startsWith('base64-')) {
+              console.log(`COOKIE_DEBUG (Middleware) - Found base64 prefix for cookie: ${name}`);
+              const base64Part = processedValue.substring(7); // Get the part after 'base64-'
               try {
-                console.log(`COOKIE_DEBUG - Detected JSON array format, attempting to parse`);
-                const parsed = JSON.parse(value);
-                // Return the first item if it's an array
+                // Attempt to decode the base64 part
+                processedValue = Buffer.from(base64Part, 'base64').toString('utf-8');
+                console.log(`COOKIE_DEBUG (Middleware) - Successfully decoded base64 for cookie: ${name}`);
+              } catch (decodeError) {
+                console.error(`COOKIE_DEBUG (Middleware) - Failed to decode base64 for cookie ${name}:`, decodeError);
+                // If decoding fails, maybe return undefined or the raw value? Let's return undefined for now.
+                // Alternatively, could return the original value without prefix? processedValue = value.substring(7);
+                return undefined; 
+              }
+            }
+            // --- END FIX --- 
+            
+            if (processedValue.length > 20) {
+              console.log(`COOKIE_DEBUG - Processed value (truncated): ${processedValue.substring(0, 20)}...`);
+            } else {
+              console.log(`COOKIE_DEBUG - Processed value: ${processedValue}`);
+            }
+
+            // Handle JSON-formatted cookies (using potentially decoded processedValue)
+            if (processedValue.startsWith('[') && processedValue.endsWith(']')) {
+              try {
+                console.log(`COOKIE_DEBUG - Detected JSON array format, attempting to parse processed value`);
+                const parsed = JSON.parse(processedValue);
                 if (Array.isArray(parsed) && parsed.length > 0) {
                   console.log(`COOKIE_DEBUG - Successfully parsed as array with ${parsed.length} items`);
                   if (parsed[0] && typeof parsed[0] === 'string' && parsed[0].length > 20) {
@@ -198,18 +210,18 @@ export async function middleware(req: NextRequest) {
                   }
                   return parsed[0];
                 } else {
-                  console.log(`COOKIE_DEBUG - Parsed but not a valid array, returning raw value`);
-                  return value;
+                  console.log(`COOKIE_DEBUG - Parsed but not a valid array, returning processed value`);
+                  return processedValue;
                 }
               } catch (parseError) {
-                console.error("Middleware: Error parsing cookie JSON:", parseError);
-                console.log(`COOKIE_DEBUG - Parse failed, returning raw value`);
-                return value; // Return the raw value as fallback
+                console.error("Middleware: Error parsing processed cookie JSON:", parseError);
+                console.log(`COOKIE_DEBUG - Parse failed, returning processed value`);
+                return processedValue; // Return the processed value as fallback
               }
             }
-            
-            console.log(`COOKIE_DEBUG - Not JSON format, returning raw value`);
-            return value;
+
+            console.log(`COOKIE_DEBUG - Not JSON format, returning processed value`);
+            return processedValue; // Return the potentially decoded value
           } catch (error) {
             console.error("Middleware: Error getting cookie:", name, error);
             return undefined;
@@ -217,7 +229,6 @@ export async function middleware(req: NextRequest) {
         },
         async set(name: string, value: string, options: CookieOptions) {
           try {
-            // Set cookies on the response
             await response.cookies.set({ name, value, ...options });
           } catch (error) {
             console.error("Middleware: Error setting cookie:", name, error);
@@ -225,7 +236,6 @@ export async function middleware(req: NextRequest) {
         },
         async remove(name: string, options: CookieOptions) {
           try {
-            // Remove cookies from the response
             await response.cookies.set({ name, value: '', ...options });
           } catch (error) {
             console.error("Middleware: Error removing cookie:", name, error);
@@ -349,17 +359,22 @@ export async function middleware(req: NextRequest) {
   // --- Post-Authentication Logic --- 
   
   // Get USER data. This verifies the session with the server.
-  console.log("SUPABASE_DEBUG - About to call getUser()");
+  console.log("SUPABASE_DEBUG - About to call getUser() in middleware");
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   
+  // --- ADDED DEBUGGING --- 
+  console.log("SUPABASE_DEBUG - getUser() result in middleware:");
+  console.log(`SUPABASE_DEBUG - User object:`, user ? { id: user.id, email: user.email, role: user.role } : null);
+  console.log(`SUPABASE_DEBUG - getUser() error:`, userError ? { name: userError.name, message: userError.message, status: (userError as any).status } : null);
+  // --- END ADDED DEBUGGING --- 
+
   if (userError) {
-      console.error("Supabase getUser Error:", userError.message);
-      // Fallthrough to check session object as fallback (getSession runs implicitly with getUser? check docs)
-      // Let\'s try relying solely on getUser for now.
+      // Log the specific error, but don't necessarily treat every error as fatal yet
+      console.error("Middleware Supabase getUser Error Encountered:", userError.message);
   }
   
-  // Log user status
-  console.log(`User exists: ${!!user}`);
+  // Log user status AFTER getUser call
+  console.log(`Middleware check: User exists after getUser(): ${!!user}`);
   if (user) {
       console.log("SUPABASE_DEBUG - User details:", {
           id: user.id,
@@ -373,7 +388,7 @@ export async function middleware(req: NextRequest) {
   
   // If no user found via getUser, redirect to sign in
   if (!user) {
-    console.log("SUPABASE_DEBUG - No valid user found via getUser().");
+    console.log("Middleware redirect: No valid user found via getUser().");
     const redirectUrl = new URL('/auth/sign-in', req.url);
     redirectUrl.searchParams.set('redirectTo', req.nextUrl.pathname);
     console.log(`No user, redirecting to ${redirectUrl.pathname}`);

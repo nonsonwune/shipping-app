@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
 import { Database } from '@/types/supabase'; // Assuming you have this types file
+import { createClient as createAdminClient } from '@/lib/supabase/admin'; // Import admin client
 
 // Define the expected structure for each item in the request
 interface ShipmentItemInput {
@@ -45,36 +44,52 @@ function calculateTotalPrice(items: ShipmentItemInput[], serviceType: string): n
 }
 
 export async function POST(request: NextRequest) {
-  // console.log('[API Route] Entering POST handler.'); // REMOVED LOG
+  console.log('[API Route] Starting shipment creation process');
 
-  // console.log('[API Route] Before cookies() call.'); // REMOVED LOG
-  // Explicitly get the cookie store instance first
-  const cookieStore = cookies();
-  // Corrected log: await cookieStore if it's a promise, then map getAll result
-  // const resolvedCookieStore = await (cookieStore instanceof Promise ? cookieStore : Promise.resolve(cookieStore));
-  // console.log('[API Route] After cookies() call. Type:', typeof resolvedCookieStore, 'Content:', JSON.stringify(resolvedCookieStore.getAll().map(c => ({ name: c.name, value: c.value })))); // REMOVED LOG
-
-  // console.log('[API Route] Before createRouteHandlerClient call.'); // REMOVED LOG
-  // Pass a function that returns the instance to the client creator
-  const supabase = createRouteHandlerClient<Database>({ cookies: () => cookieStore });
-  // console.log('[API Route] After createRouteHandlerClient call.'); // REMOVED LOG
-
-  let responseSent = false; // Flag to prevent multiple responses
+  const authHeader = request.headers.get('authorization');
+  let userId = null;
+  let adminClient = null;
+  let responseSent = false;
 
   try {
-    // 1. Get User Session
-    // console.log('[API Route] Before first supabase.auth.getSession() call.'); // REMOVED LOG
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    // console.log('[API Route] After first supabase.auth.getSession() call. Session exists:', !!session); // REMOVED LOG
-
-    if (sessionError || !session) {
-      console.error('API Error: No user session', sessionError);
+    // Simplify: Directly attempt token authentication
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      console.log('Attempting token-based authentication for shipment creation...');
+      const token = authHeader.replace('Bearer ', '');
+      
+      try {
+        // Initialize admin client
+        adminClient = createAdminClient(); 
+        
+        const { data, error } = await adminClient.auth.getUser(token);
+        
+        if (error) {
+          console.error('Token authentication error:', error);
+          // If token is invalid, treat as unauthorized
+          return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+        } else if (data.user) {
+          userId = data.user.id;
+          console.log('User authenticated via token for shipment creation:', userId);
+        }
+      } catch (tokenError) {
+        console.error('Token processing error:', tokenError);
+        return NextResponse.json({ error: 'Token processing failed' }, { status: 500 });
+      }
+    } else {
+      // No Authorization header found
+       console.error('API Error: Missing Authorization header');
+       return NextResponse.json({ error: 'Unauthorized: Missing token' }, { status: 401 });
+    }
+    
+    // Check if userId was successfully obtained
+    if (!userId) {
+      // This case should theoretically be covered above, but as a safeguard:
+      console.error('API Error: Authentication failed, user ID not found after checks.');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const userId = session.user.id;
 
     // 2. Parse Request Body
-    const body: CreateShipmentRequestBody = await request.json();
+    const body = await request.json();
     const { 
       items, 
       serviceType,
@@ -91,15 +106,14 @@ export async function POST(request: NextRequest) {
     if (!items || items.length === 0 || !serviceType || !origin || !destination || !recipientName || !recipientPhone || !deliveryAddress || !paymentMethod) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
-    // Add more specific validation for items array content if needed
 
     // 4. Calculate Total Price
     const totalAmount = calculateTotalPrice(items, serviceType);
 
     // 5. Handle Payment (Wallet Example)
+    const client = adminClient; // No fallback to standard client needed
     if (paymentMethod === 'wallet') {
-      // Fetch current balance
-      const { data: wallet, error: walletError } = await supabase
+      const { data: wallet, error: walletError } = await client
         .from('wallets')
         .select('balance')
         .eq('user_id', userId)
@@ -113,18 +127,14 @@ export async function POST(request: NextRequest) {
       if (wallet.balance < totalAmount) {
         return NextResponse.json({ error: 'Insufficient wallet balance' }, { status: 400 });
       }
-
-      // *** IMPORTANT: Wallet deduction should happen AFTER successful shipment creation ***
-      // We'll handle this deduction after calling the DB function.
     } else {
-      // Handle other payment methods (e.g., initiate Paystack)
-      // This part needs implementation based on your chosen provider
+      // Handle other payment methods
       return NextResponse.json({ error: 'Selected payment method not implemented yet' }, { status: 501 });
     }
 
     // 6. Call the Database Function to Create Shipment and Items
     console.log(`Calling create_shipment_with_items for user ${userId}`);
-    const { data: shipmentResult, error: rpcError } = await supabase.rpc('create_shipment_with_items', {
+    const { data: shipmentResult, error: rpcError } = await client.rpc('create_shipment_with_items', {
         p_user_id: userId,
         p_service_type: serviceType,
         p_origin: origin,
@@ -135,7 +145,7 @@ export async function POST(request: NextRequest) {
         p_delivery_instructions: deliveryInstructions || '',
         p_payment_method: paymentMethod,
         p_total_amount: totalAmount,
-        p_items: items // Pass the items array as JSONB
+        p_items: items
     });
 
     if (rpcError) {
@@ -143,7 +153,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create shipment in database', details: rpcError.message }, { status: 500 });
     }
 
-    if (!shipmentResult || shipmentResult.length === 0) {
+    if (!shipmentResult || !Array.isArray(shipmentResult) || shipmentResult.length === 0) {
         console.error('API Error: RPC function returned no result');
         return NextResponse.json({ error: 'Failed to create shipment, function returned empty.' }, { status: 500 });
     }
@@ -154,7 +164,7 @@ export async function POST(request: NextRequest) {
     // 7. Deduct from Wallet (if applicable and AFTER successful creation)
     if (paymentMethod === 'wallet') {
         // Re-fetch wallet balance just before deduction for accuracy
-        const { data: walletBeforeDeduct, error: fetchError } = await supabase
+        const { data: walletBeforeDeduct, error: fetchError } = await client
             .from('wallets')
             .select('balance')
             .eq('user_id', userId)
@@ -186,7 +196,7 @@ export async function POST(request: NextRequest) {
         }
 
         console.log(`Attempting wallet deduction for user ${userId}. Old Balance: ${walletBeforeDeduct.balance}, Amount: ${totalAmount}, New Balance: ${newBalance}`);
-        const { error: deductError } = await supabase
+        const { error: deductError } = await client
             .from('wallets')
             .update({ balance: newBalance }) // Update with the calculated balance
             .eq('user_id', userId);

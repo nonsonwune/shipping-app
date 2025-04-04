@@ -32,8 +32,7 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select"
-import { createBrowserClient, safeQuerySingle } from "@/lib/supabase"
-import { persistSession, recoverSession } from "@/lib/supabase/client"
+import { createClient } from "@/lib/supabase/client"
 import { Wallet, Loader2, Trash2, Plus } from "lucide-react"
 import toast from "react-hot-toast"
 import { ImageUpload } from "@/components/ui/image-upload"
@@ -96,7 +95,7 @@ function ServicesContent() {
   // Use useRef to maintain a single Supabase client instance
   const supabaseRef = useRef<any>(null);
   if (!supabaseRef.current) {
-    supabaseRef.current = createBrowserClient();
+    supabaseRef.current = createClient();
     debugLog("[DEBUG] Creating Supabase client singleton for Services page");
   }
   const supabase = supabaseRef.current;
@@ -118,17 +117,17 @@ function ServicesContent() {
     // Session persistence - only do this once when the page loads
     const persistSessionOnLoad = async () => {
       if (!sessionPersistedRef.current) {
-        debugLog("[DEBUG] Persisting session on page load");
-        const session = await persistSession();
+        debugLog("[DEBUG] Checking session on page load");
+        const { session, error } = await supabase.auth.getSession();
         if (session) {
-          debugLog("[DEBUG] Session persisted successfully");
+          debugLog("[DEBUG] Active session found");
           sessionPersistedRef.current = true;
         }
       }
     };
     
     persistSessionOnLoad();
-  }, []);
+  }, [supabase.auth]);
 
   useEffect(() => {
     async function getWalletBalance() {
@@ -164,7 +163,7 @@ function ServicesContent() {
         
         // Make sure to persist the session when we detect it's valid
         if (!sessionPersistedRef.current) {
-          await persistSession();
+          await supabase.auth.refreshSession();
           sessionPersistedRef.current = true;
           debugLog("[DEBUG] Session persisted during wallet check");
         }
@@ -230,7 +229,7 @@ function ServicesContent() {
     return () => {
       clearInterval(sessionCheckInterval)
     }
-  }, [supabase])
+  }, [supabase.auth])
 
   // --- Handler Functions for Items Array --- 
   const addItem = () => {
@@ -382,11 +381,27 @@ function ServicesContent() {
     console.log("Submitting data to API:", JSON.stringify(apiData, null, 2));
 
     try {
+        // Get auth token from supabase client for Authorization header
+        // This will help with the session issues in the API route
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        
+        // Create headers object with potential Authorization
+        const headers: HeadersInit = {
+            'Content-Type': 'application/json',
+        };
+        
+        // Add Authorization header if we have a token
+        if (accessToken) {
+            headers['Authorization'] = `Bearer ${accessToken}`;
+            debugLog('[DEBUG] Adding Authorization header with token');
+        } else {
+            debugLog('[DEBUG] No access token available for Authorization header');
+        }
+
         const response = await fetch('/api/shipments/create-with-items', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers,
             body: JSON.stringify(apiData),
         });
 

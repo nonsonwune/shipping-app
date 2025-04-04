@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { 
   Card, 
   CardContent, 
@@ -34,6 +34,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchUserData() {
+      const supabase = createClient()
       try {
         setLoading(true)
         const { data: { session } } = await supabase.auth.getSession()

@@ -20,7 +20,7 @@ import {
   TabsList, 
   TabsTrigger 
 } from "@/components/ui/tabs"
-import { createClient, getSession, recoverSession, persistSession } from "@/lib/supabase/client"
+import { createClient, getSession } from "@/lib/supabase/client"
 import { FundWalletModal } from "@/components/fund-wallet-modal"
 import { formatCurrency } from "@/lib/paystack"
 import { useToast } from "@/components/ui/use-toast"
@@ -86,7 +86,8 @@ function WalletContent() {
           // Show success toast if coming from payment
           if (status === 'success') {
             // Try to ensure session persistence
-            await persistSession();
+            const supabase = createClient();
+            await supabase.auth.refreshSession();
 
             toast({
               title: "Payment Successful",
@@ -105,7 +106,9 @@ function WalletContent() {
           console.log("DEBUG: Trying session recovery for payment completion");
           
           // Try to recover session using the standardized function
-          const recoveredSession = await recoverSession();
+          const supabase = createClient();
+          const { data } = await supabase.auth.refreshSession();
+          const recoveredSession = data.session;
           
           if (recoveredSession) {
             console.log("DEBUG: Session recovered after manual attempt");

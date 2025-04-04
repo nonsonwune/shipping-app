@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { 
   Card, 
   CardContent, 
@@ -50,10 +50,14 @@ export default function ShipmentDetailPage() {
   const printContentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    // Instantiate the correct client
+    const supabase = createClient()
+
     async function fetchShipment() {
       try {
         setLoading(true)
-        const { data: { session } } = await supabase!.auth.getSession()
+        // Use the correct client instance
+        const { data: { session } } = await supabase.auth.getSession()
         
         if (!session) {
           router.push("/auth/sign-in")
@@ -61,7 +65,8 @@ export default function ShipmentDetailPage() {
         }
 
         // Fetch the shipment with all its details
-        const { data, error } = await supabase!
+        // Use the correct client instance
+        const { data, error } = await supabase
           .from("shipments")
           .select("*")
           .eq("id", params!.id)
@@ -73,7 +78,8 @@ export default function ShipmentDetailPage() {
 
         if (data) {
           // Fetch shipment items
-          const { data: items, error: itemsError } = await supabase!
+          // Use the correct client instance
+          const { data: items, error: itemsError } = await supabase
             .from("shipment_items")
             .select("*")
             .eq("shipment_id", data.id)

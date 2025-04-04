@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowLeft, Bell, Package, Wallet, Info, CheckCircle, AlertTriangle } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
 
 type Notification = {
@@ -29,12 +29,7 @@ export default function NotificationsPage() {
         setLoading(true)
         
         // Get the current session
-        if (!supabase) {
-          console.error("Supabase client not initialized");
-          // Optionally redirect or show an error message
-          router.push("/auth/sign-in?error=client_init_failed");
-          return;
-        }
+        const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession()
         
         if (!session) {
@@ -78,10 +73,7 @@ export default function NotificationsPage() {
       
       // Update in database if available
       try {
-        if (!supabase) {
-          console.error("Supabase client not initialized");
-          return; // Don't attempt DB update if client is null
-        }
+        const supabase = createClient();
         const { error } = await supabase
           .from("notifications")
           .update({ is_read: true })
@@ -105,10 +97,7 @@ export default function NotificationsPage() {
       
       // Update in database if available
       try {
-        if (!supabase) {
-          console.error("Supabase client not initialized");
-          return; // Don't attempt DB update if client is null
-        }
+        const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession()
         
         if (session) {

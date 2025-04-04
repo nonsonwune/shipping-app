@@ -219,11 +219,11 @@ export default function ShipmentsPage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <p className="text-gray-500">Origin</p>
-                        <p className="font-medium">{shipment.origin || "N/A"}</p>
+                        <p className="font-medium">{shipment.origin_text || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Destination</p>
-                        <p className="font-medium">{shipment.destination || "N/A"}</p>
+                        <p className="font-medium">{shipment.destination_text || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Date</p>
@@ -280,11 +280,11 @@ export default function ShipmentsPage() {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <p className="text-gray-500">Origin</p>
-                        <p className="font-medium">{shipment.origin || "N/A"}</p>
+                        <p className="font-medium">{shipment.origin_text || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Destination</p>
-                        <p className="font-medium">{shipment.destination || "N/A"}</p>
+                        <p className="font-medium">{shipment.destination_text || "N/A"}</p>
                       </div>
                       <div>
                         <p className="text-gray-500">Date</p>
