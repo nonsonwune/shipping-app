@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/select"
 import { createBrowserClient, safeQuerySingle } from "@/lib/supabase"
 import { persistSession, recoverSession } from "@/lib/supabase/client"
-import { Wallet, Loader2 } from "lucide-react"
+import { Wallet, Loader2, Trash2, Plus } from "lucide-react"
 import toast from "react-hot-toast"
 import { ImageUpload } from "@/components/ui/image-upload"
 import { Session } from "@supabase/supabase-js"; // Import Session type
@@ -53,18 +53,35 @@ function ServicesContent() {
   const [step, setStep] = useState<number>(1)
   const [walletBalance, setWalletBalance] = useState<number>(0)
   const [userId, setUserId] = useState<string | null>(null)
+  
+  // Define interface for a single item
+  interface ShipmentItem {
+    id: string; // Unique ID for React key prop
+    description: string;
+    weight: string;
+    quantity: string;
+    category: string;
+    dimensions: string;
+  }
+
   const [formData, setFormData] = useState({
     origin: "",
     destination: "",
-    weight: "",
-    dimensions: "",
-    description: "",
     recipientName: "",
     recipientPhone: "",
     deliveryAddress: "",
     deliveryInstructions: "",
     serviceType: type === "import" ? "import-sea" : "export-sea",
-    packageImages: [] as string[] // Array to store uploaded image URLs
+    items: [
+      {
+        id: crypto.randomUUID(), // Generate unique ID for the first item
+        description: "",
+        weight: "",
+        quantity: "1",
+        category: "",
+        dimensions: "" 
+      }
+    ] as ShipmentItem[]
   })
   const [paymentMethod, setPaymentMethod] = useState<string>("wallet")
   const [pricing, setPricing] = useState({
@@ -215,40 +232,91 @@ function ServicesContent() {
     }
   }, [supabase])
 
-  // Calculate pricing whenever service type or weight changes
-  useEffect(() => {
-    if (!formData.weight) return
+  // --- Handler Functions for Items Array --- 
+  const addItem = () => {
+    setFormData(prev => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        {
+          id: crypto.randomUUID(), // Use crypto for better UUID generation
+          description: "",
+          weight: "",
+          quantity: "1",
+          category: "",
+          dimensions: ""
+        }
+      ]
+    }));
+  };
 
-    const weight = parseFloat(formData.weight)
-    let basePrice = 0
-    
-    if (formData.serviceType === "import-sea") {
-      basePrice = weight * 1500
-    } else if (formData.serviceType === "import-air") {
-      basePrice = weight * 2500
-    } else if (formData.serviceType === "export-sea") {
-      basePrice = weight * 2000
-    } else if (formData.serviceType === "export-documents") {
-      basePrice = weight * 1000
-    } else {
-      basePrice = weight * 1200
+  const removeItem = (idToRemove: string) => {
+    // Prevent removing the last item
+    if (formData.items.length <= 1) {
+      toast("You must have at least one item.");
+      return;
     }
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.filter(item => item.id !== idToRemove)
+    }));
+  };
 
-    const tax = basePrice * 0.075 // 7.5% VAT
-    const insurance = basePrice * 0.05 // 5% insurance
-    const total = basePrice + tax + insurance
+  const updateItem = (idToUpdate: string, field: keyof ShipmentItem, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.map(item =>
+        item.id === idToUpdate ? { ...item, [field]: value } : item
+      )
+    }));
+  };
+  // --- End Handler Functions ---
 
+  // Calculate pricing whenever service type or items change
+  useEffect(() => {
+    let calculatedBasePrice = 0;
+    const taxRate = 0.075; // 7.5% VAT
+    const insuranceRate = 0.05; // 5% insurance
+    const serviceBaseRate = formData.serviceType.includes('air') ? 2500 : formData.serviceType.includes('sea') ? 1500 : 1200;
+
+    // Iterate through each item to calculate base price
+    formData.items.forEach(item => {
+      const weight = parseFloat(item.weight) || 0; // Default to 0 if parsing fails
+      const quantity = parseInt(item.quantity, 10) || 1; // Default to 1
+      
+      if (weight > 0 && quantity > 0) {
+        calculatedBasePrice += weight * quantity * serviceBaseRate;
+      }
+    });
+
+    // Calculate final pricing
+    const tax = calculatedBasePrice * taxRate;
+    const insurance = calculatedBasePrice * insuranceRate;
+    const total = calculatedBasePrice + tax + insurance;
+
+    // Update pricing state
     setPricing({
-      basePrice: Math.round(basePrice),
+      basePrice: Math.round(calculatedBasePrice),
       tax: Math.round(tax),
       insurance: Math.round(insurance),
       total: Math.round(total)
-    })
-  }, [formData.serviceType, formData.weight])
+    });
+    
+    console.log("Pricing updated:", { 
+        items: formData.items, 
+        calculatedTotal: Math.round(total) 
+    });
 
+  }, [formData.serviceType, formData.items]) // Depend on items array and serviceType
+
+  // This generic handleChange only works for top-level fields now
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target
-    setFormData(prev => ({ ...prev, [name]: value }))
+    if (name in formData && name !== 'items') {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    } else {
+       console.warn(`Attempted to handle change for unmanaged field or item: ${name}`);
+    }
   }
 
   const handleServiceTypeChange = (value: string) => {
@@ -260,223 +328,120 @@ function ServicesContent() {
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    // Pre-submit validation
-    if (!formData.origin || !formData.destination) {
-      toast.error("Missing information. Please fill in all required fields.")
-      return
+    e.preventDefault();
+    setIsLoading(true);
+
+    // --- Validation --- 
+    // Basic validation for top-level fields
+    if (!formData.origin || !formData.destination || !formData.recipientName || !formData.recipientPhone || !formData.deliveryAddress || !paymentMethod) {
+      toast.error("Missing required shipment or recipient information.");
+      setIsLoading(false);
+      return;
     }
+    
+    // Validate each item
+    let itemsValid = true;
+    formData.items.forEach((item, index) => {
+      if (!item.description || !item.weight || parseFloat(item.weight) <= 0 || !item.quantity || parseInt(item.quantity, 10) <= 0) {
+        toast.error(`Please fill in description, weight (>0), and quantity (>0) for Item ${index + 1}.`);
+        itemsValid = false;
+      }
+    });
 
-    // Show loading state to prevent multiple submissions
-    setIsLoading(true)
-
-    try {
-      debugLog("[DEBUG] Starting shipment booking process...");
-      
-      // Check cookies again before booking
-      const cookies = document.cookie.split(';').map(cookie => cookie.trim());
-      debugLog("[DEBUG] Checking auth cookies:", document.cookie);
-      debugLog(cookies.length ? "[DEBUG] Found auth cookies:" : "[DEBUG] Found auth cookies: None", cookies);
-      
-      let session: Session | null;
-      
-      try {
-        // Attempt to get session
-        const { data, error } = await supabase.auth.getSession();
-        session = data?.session;
-        
-        // Debug session state
-        debugLog("[DEBUG] Session check before booking:", session ? "Session exists" : "No session");
-        
-        // If no session, try to recover it
-        if (!session) {
-          debugLog("[DEBUG] No session found, attempting recovery...");
-          
-          // Try to recover session from our backup
-          session = await recoverSession();
-          
-          if (!session) {
-            debugLog("[DEBUG] Session recovery failed, redirecting to login");
-            toast.error("Your session has expired. Please log in again.");
-            router.push("/auth/sign-in?redirect=/services");
-            return;
-          } else {
-            debugLog("[DEBUG] Session recovered successfully!");
-          }
-        }
-      } catch (error) {
-        debugLog("[DEBUG] Session retrieval error:", error);
-        toast.error("Failed to retrieve session. Please try again.");
+    if (!itemsValid) {
         setIsLoading(false);
         return;
       }
 
-      // Check if using wallet and has enough balance
+    // Wallet balance check (already done in API, but good for frontend feedback)
       if (paymentMethod === "wallet" && walletBalance < pricing.total) {
-        setIsLoading(false)
-        toast.error("Insufficient balance. Please fund your wallet or select another payment method.")
-        return
-      }
-
-      debugLog("[DEBUG] Creating shipment record with user_id:", session.user.id)
-      
-      // Create a shipment with the user ID properly set
-      if (!supabase) {
-        debugLog("[DEBUG] Supabase client is null when creating shipment");
-        setIsLoading(false)
-        toast.error("Connection Error. Database connection failed. Please refresh the page and try again.")
-        return
-      }
-      
-      const { data: shipment, error: shipmentError } = await supabase
-        .from("shipments")
-        .insert({
-          // Required fields only
-          tracking_number: `SHP${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 1000)}`,
-          user_id: session.user.id,
-          company_id: null,
-          service_id: null,
-          origin_address_id: null,
-          destination_address_id: null,
-          status: "pending",
-          // Store details in text fields
-          special_instructions: `Service: ${formData.serviceType}
-Origin: ${formData.origin}
-Destination: ${formData.destination}
-User Email: ${session?.user?.email || "Unknown"}
-Additional Instructions: ${formData.deliveryInstructions || "None"}`,
-          delivery_address: formData.deliveryAddress,
-          recipient_phone: formData.recipientPhone,
-          // Package details
-          total_weight: parseFloat(formData.weight),
-          weight_unit: "kg",
-          dimensions: JSON.stringify({
-            length: formData.dimensions ? formData.dimensions.split("x")[0] : "0",
-            width: formData.dimensions ? formData.dimensions.split("x")[1] : "0", 
-            height: formData.dimensions ? formData.dimensions.split("x")[2] : "0"
-          }),
-          description: formData.description || "",
-          // Payment details
-          amount: pricing.total,
-          currency: "NGN",
-          // Package images stored in metadata JSONB column
-          metadata: {
-            packageImages: formData.packageImages
-          }
-        })
-        .select()
-
-      if (shipmentError) {
-        debugLog("[DEBUG] Error creating shipment:", shipmentError);
-        setIsLoading(false)
-        toast.error("Failed to create shipment. Please try again.")
-        return
-      }
-
-      debugLog("[DEBUG] Shipment created successfully:", shipment)
-
-      // Create transaction record before updating wallet
-      if (paymentMethod === "wallet") {
-        debugLog("[DEBUG] Creating transaction record for wallet payment")
-        
-        try {
-          if (!supabase) {
-            throw new Error("Database connection lost")
-          }
-          
-          const { data: transaction, error: transactionError } = await supabase
-            .from("transactions")
-            .insert({
-              user_id: session.user.id,
-              amount: pricing.total,
-              status: "completed",
-              transaction_type: "shipment_payment",
-              type: "payment",
-              reference: `SHP_PAY_${Date.now()}`,
-              payment_gateway: "wallet",
-              metadata: {
-                shipment_id: shipment?.[0]?.id,
-                tracking_number: shipment?.[0]?.tracking_number,
-                service_type: formData.serviceType
-              }
-            })
-            .select()
-            
-          if (transactionError) {
-            debugLog("[DEBUG] Transaction creation error:", transactionError);
-            // Continue with wallet update anyway
-          } else {
-            debugLog("[DEBUG] Transaction created successfully:", transaction)
-          }
-        } catch (transactionError) {
-          debugLog("[DEBUG] Transaction creation exception:", transactionError);
-          // Continue with wallet update anyway
-        }
-
-        // Now update the wallet balance
-        debugLog("[DEBUG] Updating wallet balance from", walletBalance, "to", walletBalance - pricing.total)
-        
-        if (!supabase) {
-          throw new Error("Database connection lost when updating wallet")
-        }
-        
-        const { error: walletError } = await supabase
-          .from("wallets")
-          .update({
-            balance: walletBalance - pricing.total
-          })
-          .eq("user_id", session.user.id)
-
-        if (walletError) {
-          debugLog("[DEBUG] Error deducting from wallet:", walletError);
-          setIsLoading(false)
-          toast.error("Failed to process payment. Please try again.")
-          return
-        }
-        
-        debugLog("[DEBUG] Wallet balance updated successfully")
-      }
-
-      // Verify session still exists after all operations
-      if (!supabase) {
-        debugLog("[DEBUG] Supabase client is null when verifying session");
-        setIsLoading(false)
-        toast.error("Failed to verify session. Please refresh and try again.")
-        return
-      }
-      
-      const { data: { session: sessionAfter } } = await supabase.auth.getSession()
-      debugLog("[DEBUG] Session check after booking:", sessionAfter ? "Session still exists" : "Session LOST!")
-
-      // If booking is successful, redirect to home page
-      if (shipment) {
-        // Display success message
-        toast.success("Shipment booked successfully!")
-        
-        // Store the shipment tracking number in localStorage for reference
-        if (typeof window !== "undefined") {
-          localStorage.setItem("lastBookingSuccess", "true")
-          localStorage.setItem("lastTrackingNumber", shipment[0]?.tracking_number || "")
-        }
-        
-        debugLog("[DEBUG] Booking complete, redirecting to homepage")
-        setIsRedirecting(true)
-        
-        // Wait a moment to ensure toast is displayed before redirect
-        setTimeout(() => {
-          // Redirect to shipments page to see the new shipment
-          router.push("/shipments")
-        }, 1500)
-        
-        return
-      }
-    } catch (error) {
-      debugLog("[DEBUG] Error processing shipment:", error);
-      setIsLoading(false)
-      toast.error("An error occurred. Please try again.")
+      toast.error("Insufficient balance. Please fund your wallet or select another payment method.");
+      setIsLoading(false);
+      return;
     }
-  }
+    // --- End Validation --- 
+
+    // Prepare data for the API
+    const apiData = {
+        serviceType: formData.serviceType,
+        origin: formData.origin,
+        destination: formData.destination,
+        recipientName: formData.recipientName,
+        recipientPhone: formData.recipientPhone,
+        deliveryAddress: formData.deliveryAddress,
+        deliveryInstructions: formData.deliveryInstructions,
+        paymentMethod: paymentMethod,
+        // Convert weight/quantity to numbers for API
+        items: formData.items.map(item => ({
+            ...item,
+            weight: parseFloat(item.weight) || 0,
+            quantity: parseInt(item.quantity, 10) || 1
+        }))
+    };
+
+    console.log("Submitting data to API:", JSON.stringify(apiData, null, 2));
+
+    try {
+        const response = await fetch('/api/shipments/create-with-items', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(apiData),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            // Handle specific errors from the API
+            if (response.status === 400 && result.error === 'Insufficient wallet balance') {
+                 toast.error("Insufficient wallet balance. Please fund your wallet.");
+          } else {
+                toast.error(`Error: ${result.error || 'Failed to book shipment.'}`);
+            }
+            throw new Error(result.error || `HTTP error ${response.status}`);
+        }
+
+        // --- Success Flow ---
+        toast.success(result.message || "Shipment booked successfully!");
+        
+        // Store tracking number if available
+        if (typeof window !== "undefined" && result.trackingNumber) {
+            localStorage.setItem("lastBookingSuccess", "true");
+            localStorage.setItem("lastTrackingNumber", result.trackingNumber);
+        }
+        
+        // Handle potential warnings (like payment deduction issues)
+        if (result.warning) {
+            console.warn("Shipment booked with warning:", result.warning);
+            // Optionally show a different message to the user
+        }
+
+        setIsRedirecting(true);
+        // Refresh wallet balance potentially?
+        // await getWalletBalance(); // Might cause race condition with redirect
+        
+        setTimeout(() => {
+            router.push("/shipments"); // Redirect to shipments list
+        }, 1500);
+
+    } catch (error: any) {
+        debugLog("[DEBUG] Error submitting shipment:", error);
+        // Check if the error message indicates it was an HTTP error already handled
+        // Or if it's a specific handled error like insufficient balance
+        const isHandledError = 
+            (error.message && error.message.includes('HTTP error')) ||
+            (error.message && error.message.includes('Insufficient wallet balance')); 
+            
+        if (!isHandledError) {
+             // If the error wasn't an HTTP error already toasted, show a generic message
+             toast.error("An unexpected error occurred during submission.");
+        }
+        // If it was a handled error (like !response.ok), the specific toast was already shown.
+    } finally {
+       setIsLoading(false);
+    }
+  };
 
   const handleServiceSelect = (service: string) => {
     setSelectedService(service)
@@ -679,62 +644,99 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
                       </div>
                     </div>
                     
+                    <Label className="font-semibold">Package Details</Label>
+                    <div className="space-y-4">
+                      {formData.items.map((item, index) => (
+                        <div key={item.id} className="p-4 border border-gray-200 rounded-lg bg-gray-50/50 relative">
+                          {formData.items.length > 1 && (
+                            <Button 
+                              type="button" 
+                              variant="ghost" 
+                              size="icon" 
+                              className="absolute top-2 right-2 h-6 w-6" 
+                              onClick={() => removeItem(item.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                              <span className="sr-only">Remove Item</span>
+                            </Button>
+                          )}
+                          <h4 className="font-medium mb-3">Item {index + 1}</h4>
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              <Label htmlFor={`item-desc-${item.id}`}>Description</Label>
+                              <Textarea 
+                                id={`item-desc-${item.id}`} 
+                                placeholder="Detailed description of the item"
+                                value={item.description}
+                                onChange={(e) => updateItem(item.id, 'description', e.target.value)}
+                                required 
+                                rows={2} 
+                              />
+                            </div>
                     <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="weight">Weight (kg)</Label>
+                              <div className="space-y-1">
+                                <Label htmlFor={`item-weight-${item.id}`}>Weight (kg)</Label>
                         <Input
-                          id="weight"
-                          name="weight"
+                                  id={`item-weight-${item.id}`} 
                           type="number"
-                          placeholder="Package weight in kg"
-                          value={formData.weight}
-                          onChange={handleChange}
+                                  placeholder="e.g., 1.5" 
+                                  value={item.weight}
+                                  min="0.1" 
+                                  step="0.1" 
+                                  onChange={(e) => updateItem(item.id, 'weight', e.target.value)}
                           required
                         />
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="dimensions">Dimensions (optional)</Label>
+                              <div className="space-y-1">
+                                <Label htmlFor={`item-quantity-${item.id}`}>Quantity</Label>
                         <Input
-                          id="dimensions"
-                          name="dimensions"
-                          placeholder="L x W x H in cm"
-                          value={formData.dimensions}
-                          onChange={handleChange}
+                                  id={`item-quantity-${item.id}`} 
+                                  type="number" 
+                                  placeholder="1" 
+                                  value={item.quantity}
+                                  min="1" 
+                                  step="1" 
+                                  onChange={(e) => updateItem(item.id, 'quantity', e.target.value)}
+                                  required 
                         />
                       </div>
                     </div>
-                    
-                    <div className="space-y-2">
-                      <Label htmlFor="description">Package Description</Label>
-                      <Textarea
-                        id="description"
-                        name="description"
-                        placeholder="Tell us about what you're shipping"
-                        value={formData.description}
-                        onChange={handleChange}
-                        required
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-1">
+                                <Label htmlFor={`item-category-${item.id}`}>Category (Optional)</Label>
+                                <Input 
+                                  id={`item-category-${item.id}`} 
+                                  placeholder="e.g., Electronics, Clothing"
+                                  value={item.category}
+                                  onChange={(e) => updateItem(item.id, 'category', e.target.value)}
                       />
                     </div>
-                    
-                    <div className="space-y-2">
-                      <ImageUpload 
-                        label="Package Image (Optional)"
-                        userId={userId || undefined}
-                        onImageUploaded={(imageUrl) => {
-                          if (imageUrl) {
-                            setFormData(prev => ({
-                              ...prev,
-                              packageImages: [...prev.packageImages, imageUrl]
-                            }));
-                          }
-                        }}
-                      />
-                      {formData.packageImages.length > 0 && (
-                        <p className="text-sm text-green-600">{formData.packageImages.length} image(s) uploaded</p>
-                      )}
+                              <div className="space-y-1">
+                                <Label htmlFor={`item-dimensions-${item.id}`}>Dimensions (LxWxH cm, Optional)</Label>
+                                <Input 
+                                  id={`item-dimensions-${item.id}`} 
+                                  placeholder="e.g., 30x20x10"
+                                  value={item.dimensions}
+                                  onChange={(e) => updateItem(item.id, 'dimensions', e.target.value)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                     
-                    <Button type="button" onClick={() => setStep(2)} className="w-full bg-blue-600 text-white hover:bg-blue-700">
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      className="w-full border-dashed mt-4"
+                      onClick={addItem}
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Another Item
+                    </Button>
+                    
+                    <Button type="button" onClick={() => setStep(2)} className="w-full bg-blue-600 text-white hover:bg-blue-700 mt-4">
                       Continue to Delivery Info
                     </Button>
                   </div>
@@ -802,7 +804,6 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
                 
                 <TabsContent value="step-3">
                   <div className="space-y-4 py-4">
-                    {/* Pricing Summary */}
                     <Card>
                       <CardHeader>
                         <CardTitle>Pricing Summary</CardTitle>
@@ -827,7 +828,6 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
                       </CardContent>
                     </Card>
                     
-                    {/* Wallet Balance */}
                     <div className="bg-slate-100 p-4 rounded-lg flex items-center justify-between">
                       <div className="flex items-center">
                         <Wallet className="h-5 w-5 text-blue-700 mr-2" />
@@ -842,7 +842,6 @@ Additional Instructions: ${formData.deliveryInstructions || "None"}`,
                       </div>
                     )}
                     
-                    {/* Payment Method Selection */}
                     <div className="space-y-2">
                       <Label htmlFor="paymentMethod">Payment Method</Label>
                       <Select value={paymentMethod} onValueChange={handlePaymentMethodChange}>

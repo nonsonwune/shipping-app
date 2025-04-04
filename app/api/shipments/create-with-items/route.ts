@@ -45,12 +45,27 @@ function calculateTotalPrice(items: ShipmentItemInput[], serviceType: string): n
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = createRouteHandlerClient<Database>({ cookies });
+  // console.log('[API Route] Entering POST handler.'); // REMOVED LOG
+
+  // console.log('[API Route] Before cookies() call.'); // REMOVED LOG
+  // Explicitly get the cookie store instance first
+  const cookieStore = cookies();
+  // Corrected log: await cookieStore if it's a promise, then map getAll result
+  // const resolvedCookieStore = await (cookieStore instanceof Promise ? cookieStore : Promise.resolve(cookieStore));
+  // console.log('[API Route] After cookies() call. Type:', typeof resolvedCookieStore, 'Content:', JSON.stringify(resolvedCookieStore.getAll().map(c => ({ name: c.name, value: c.value })))); // REMOVED LOG
+
+  // console.log('[API Route] Before createRouteHandlerClient call.'); // REMOVED LOG
+  // Pass a function that returns the instance to the client creator
+  const supabase = createRouteHandlerClient<Database>({ cookies: () => cookieStore });
+  // console.log('[API Route] After createRouteHandlerClient call.'); // REMOVED LOG
+
   let responseSent = false; // Flag to prevent multiple responses
 
   try {
     // 1. Get User Session
+    // console.log('[API Route] Before first supabase.auth.getSession() call.'); // REMOVED LOG
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    // console.log('[API Route] After first supabase.auth.getSession() call. Session exists:', !!session); // REMOVED LOG
 
     if (sessionError || !session) {
       console.error('API Error: No user session', sessionError);

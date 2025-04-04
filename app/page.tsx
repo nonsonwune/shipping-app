@@ -40,19 +40,25 @@ export default function Home() {
 
   useEffect(() => {
     async function getProfile() {
+      // Add check for supabase client (though likely unnecessary with direct import)
+      if (!supabase) {
+          console.error("Supabase client is not available.");
+          setLoading(false);
+          return;
+      }
+      
       try {
         // Get the current session
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-
-        if (!session) {
-          router.push("/auth/sign-in")
-          return
+        const sessionResponse = await supabase.auth.getSession(); // Removed ?. as direct import should guarantee non-null
+        if (sessionResponse.error || !sessionResponse.data.session) {
+            console.error("Failed to get session or no session:", sessionResponse.error);
+            router.push("/auth/sign-in");
+            return;
         }
+        const { data: { session } } = sessionResponse; // Destructure after check
 
         // Store user data
-        setUser(session.user)
+        setUser(session.user);
 
         // Create a minimal profile from user data
         const userProfile = {
@@ -61,114 +67,114 @@ export default function Home() {
           last_name: session.user.user_metadata?.last_name || "",
           email: session.user.email || "",
           wallet_balance: 0,
-        }
+        };
 
         try {
           // Try to fetch profile from profiles table
-          const { data, error } = await supabase
+          const profileResponse = await supabase // Removed ?. 
             .from("profiles")
             .select("*")
             .eq("id", session.user.id)
-            .maybeSingle() // Use maybeSingle instead of single to avoid errors when no row is found
+            .maybeSingle();
 
-          if (data) {
-            console.log("Profile data retrieved:", data)
-            setProfile(data)
+          // Check response before destructuring
+          if (profileResponse?.data) {
+            console.log("Profile data retrieved:", profileResponse.data);
+            setProfile(profileResponse.data);
           } else {
-            console.log("No profile found, using user metadata instead")
-            setProfile(userProfile)
+            console.log("No profile found or error fetching profile, using user metadata instead", profileResponse?.error);
+            setProfile(userProfile);
           }
         } catch (profileError) {
-          console.error("Error loading profile:", profileError)
-          
-          // Use the minimal profile from user data if the profiles table doesn't exist
-          setProfile(userProfile)
+          console.error("Error loading profile:", profileError);
+          setProfile(userProfile); // Fallback
         }
         
         // Fetch wallet balance from wallets table
         try {
-          const { data: walletData, error: walletError } = await supabase
+          const walletResponse = await supabase // Removed ?. 
             .from("wallets")
             .select("balance")
             .eq("user_id", session.user.id)
             .maybeSingle();
             
-          if (walletData) {
-            console.log("Wallet data retrieved:", walletData);
-            setWalletBalance(walletData.balance || 0);
+          if (walletResponse?.data) {
+            console.log("Wallet data retrieved:", walletResponse.data);
+            setWalletBalance(walletResponse.data.balance || 0);
           } else {
-            console.log("No wallet found, using 0 balance");
+            console.log("No wallet found or error fetching wallet", walletResponse?.error);
             setWalletBalance(0);
           }
-          
-          if (walletError) {
-            console.error("Error fetching wallet:", walletError);
-          }
-        } catch (walletError) {
-          console.error("Error fetching wallet:", walletError);
+          // Error logging was already handled essentially
+        } catch (walletCatchError) {
+          console.error("Error fetching wallet (catch block):", walletCatchError);
+          setWalletBalance(0); // Ensure balance is reset on error
         }
         
         // Fetch recent shipments
         try {
-          const { data: shipmentsData, error: shipmentsError } = await supabase
+          const shipmentsResponse = await supabase // Removed ?. 
             .from("shipments")
-            .select("*")
+            .select("*, shipment_items(*)") // Also fetch related items
             .order("created_at", { ascending: false })
-            .limit(5)
+            .limit(5);
             
-          if (shipmentsError) {
-            console.error("Error fetching shipments:", shipmentsError)
-          } else if (shipmentsData) {
-            setShipments(shipmentsData)
+          if (shipmentsResponse?.error) {
+            console.error("Error fetching shipments:", shipmentsResponse.error);
+          } else if (shipmentsResponse?.data) {
+            // Assuming Shipment type includes status and created_at
+            const shipmentsData = shipmentsResponse.data as any[]; // Use any or define a proper Shipment type
+            setShipments(shipmentsData);
             
-            // Calculate shipment stats
-            const active = shipmentsData.filter(s => 
+            // Calculate shipment stats - Add types to filter params
+            const active = shipmentsData.filter((s: any) => 
               s.status && ['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())
-            ).length
+            ).length;
             
-            const delivered = shipmentsData.filter(s => 
+            const delivered = shipmentsData.filter((s: any) => 
               s.status && s.status.toLowerCase() === 'delivered'
-            ).length
+            ).length;
             
             // Calculate dates for this week and month
-            const now = new Date()
-            const startOfWeek = new Date(now)
-            startOfWeek.setDate(now.getDate() - now.getDay()) // Start of current week (Sunday)
+            const now = new Date();
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - now.getDay()); // Start of current week (Sunday)
+            startOfWeek.setHours(0, 0, 0, 0);
             
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1) // Start of current month
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // Start of current month
             
-            // Count shipments for this week and month
-            const activeThisWeek = shipmentsData.filter(s => {
-              if (!s.status || !['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())) return false
-              const shipmentDate = new Date(s.created_at)
-              return shipmentDate >= startOfWeek
-            }).length
+            // Count shipments for this week and month - Add types to filter params
+            const activeThisWeek = shipmentsData.filter((s: any) => {
+              if (!s.status || !['pending', 'processing', 'in transit'].includes(s.status.toLowerCase())) return false;
+              const shipmentDate = new Date(s.created_at);
+              return shipmentDate >= startOfWeek;
+            }).length;
             
-            const deliveredThisMonth = shipmentsData.filter(s => {
-              if (!s.status || s.status.toLowerCase() !== 'delivered') return false
-              const shipmentDate = new Date(s.created_at)
-              return shipmentDate >= startOfMonth
-            }).length
+            const deliveredThisMonth = shipmentsData.filter((s: any) => {
+              if (!s.status || s.status.toLowerCase() !== 'delivered') return false;
+              const shipmentDate = new Date(s.created_at);
+              return shipmentDate >= startOfMonth;
+            }).length;
             
             setShipmentStats({
               active,
               delivered,
               activeThisWeek,
               deliveredThisMonth
-            })
+            });
           }
-        } catch (shipmentsError) {
-          console.error("Error fetching shipments:", shipmentsError)
+        } catch (shipmentsCatchError) {
+          console.error("Error fetching shipments (catch block):", shipmentsCatchError);
         }
       } catch (error) {
-        console.error("Dashboard error:", error)
+        console.error("Dashboard error:", error);
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
     }
 
-    getProfile()
-  }, [router])
+    getProfile();
+  }, [router, supabase]); // Add supabase to dependency array if it's stable
 
   // Helper function to get display name from profile
   const getDisplayName = () => {

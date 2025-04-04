@@ -29,16 +29,16 @@ BEGIN
     INSERT INTO public.shipments (
         user_id,
         service_type,
-        origin,
-        destination,
+        origin_text,
+        destination_text,
         recipient_name,
         recipient_phone,
         delivery_address,
         delivery_instructions,
         payment_method,
-        amount, -- Renamed this column? If so, adjust here or rename column
-        status, -- Default is 'pending'
-        tracking_number -- Added tracking number
+        amount,
+        status,
+        tracking_number
     )
     VALUES (
         p_user_id,

@@ -199,15 +199,24 @@ export default function ShipmentsManagement() {
   // Fetch shipments and check user role
   useEffect(() => {
     const fetchShipmentsAndRole = async () => {
+      // Add check for supabase client
+      if (!supabase) {
+          console.error("Admin Shipments: Supabase client is not available.");
+          setLoading(false);
+          return;
+      }
+      
       try {
         setLoading(true)
         
         // Get current session
-        const { data: { session } } = await supabase!.auth.getSession()
+        const { data: { session } } = await supabase.auth.getSession();
         
         if (!session) {
           console.error("No active session")
-          return
+          // TODO: Redirect to login?
+          setLoading(false); // Ensure loading stops
+          return;
         }
         
         const userId = session.user.id
@@ -227,6 +236,12 @@ export default function ShipmentsManagement() {
         
         // Fetch shipments
         const fetchShipments = async () => {
+            // Add check here too, though less likely to be null if checked above
+            if (!supabase) {
+                console.error("Admin Shipments: Supabase client unavailable for fetching.");
+                setLoading(false);
+                return;
+            }
           try {
             setLoading(true);
             const { data, error } = await supabase
@@ -334,6 +349,12 @@ export default function ShipmentsManagement() {
   
   // Update shipment status
   const handleUpdateStatus = async () => {
+    // Add check for supabase client
+    if (!supabase) {
+        console.error("Admin Shipments: Supabase client unavailable for update.");
+        toast({ title: "Error", description: "Database connection failed.", variant: "destructive" });
+        return;
+    }
     if (!editingShipment) return;
     
     // Check if user has permission to update to the selected status
@@ -355,7 +376,7 @@ export default function ShipmentsManagement() {
       const formattedStatus = formatStatusForDatabase(shipmentStatus);
       
       // Update shipment status
-      const { error: updateError } = await supabase!.from('shipments')
+      const { error: updateError } = await supabase.from('shipments')
         .update({ 
           status: formattedStatus,
           updated_at: now
