@@ -6,7 +6,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import StatCard from "@/components/stat-card"
 import ActionCard from "@/components/action-card"
-import { Globe, Package, FileText, MapPin, Wallet } from "lucide-react"
+import { Globe, Package, FileText, MapPin, Wallet, Truck } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 import type { User } from "@supabase/supabase-js"
@@ -267,10 +267,10 @@ export default function Home() {
             href="/quote"
           />
           <ActionCard
-            icon={<Globe className="w-5 h-5" />}
-            title="Services"
-            description="Explore our services"
-            href="/services"
+            icon={<Truck className="w-5 h-5" />}
+            title="Shipments"
+            description="View all shipments"
+            href="/shipments"
           />
         </div>
       </div>
