@@ -19,7 +19,9 @@ import {
   Calendar, 
   PlusCircle, 
   RefreshCw,
-  Wallet
+  Wallet,
+  MapPin,
+  FileText
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
@@ -142,23 +144,41 @@ export default function DashboardPage() {
       </header>
       
       {/* Quick actions */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <Button 
-          variant="outline" 
-          className="h-auto py-4 flex flex-col items-center justify-center gap-2"
-          onClick={() => router.push("/services")}
-        >
-          <PlusCircle className="h-5 w-5" />
-          <span>Book Shipment</span>
-        </Button>
-        <Button 
-          variant="outline" 
-          className="h-auto py-4 flex flex-col items-center justify-center gap-2"
-          onClick={() => router.push("/track-shipment")}
-        >
-          <Truck className="h-5 w-5" />
-          <span>Track Shipment</span>
-        </Button>
+      <div className="mb-6">
+        <h2 className="text-lg font-bold mb-4">Quick Actions</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <Card className="cursor-pointer" onClick={() => router.push('/services')}>
+            <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+              <Package className="h-10 w-10 mb-3 text-blue-500" />
+              <h3 className="font-medium">Ship Package</h3>
+              <p className="text-sm text-gray-500 mt-1">Send a package</p>
+            </CardContent>
+          </Card>
+          
+          <Card className="cursor-pointer" onClick={() => router.push('/track-shipment')}>
+            <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+              <MapPin className="h-10 w-10 mb-3 text-blue-500" />
+              <h3 className="font-medium">Track</h3>
+              <p className="text-sm text-gray-500 mt-1">Track your shipment</p>
+            </CardContent>
+          </Card>
+          
+          <Card className="cursor-pointer" onClick={() => router.push('/quote')}>
+            <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+              <FileText className="h-10 w-10 mb-3 text-blue-500" />
+              <h3 className="font-medium">Get a Quote</h3>
+              <p className="text-sm text-gray-500 mt-1">Calculate shipping costs</p>
+            </CardContent>
+          </Card>
+          
+          <Card className="cursor-pointer" onClick={() => router.push('/wallet')}>
+            <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+              <Wallet className="h-10 w-10 mb-3 text-blue-500" />
+              <h3 className="font-medium">Wallet</h3>
+              <p className="text-sm text-gray-500 mt-1">Manage your balance</p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
       
       {/* Wallet card */}

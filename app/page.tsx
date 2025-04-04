@@ -249,28 +249,28 @@ export default function Home() {
         <h2 className="text-lg font-medium">Quick Actions</h2>
         <div className="grid grid-cols-2 gap-4">
           <ActionCard
-            title="Ship Package"
             icon={<Package className="w-5 h-5" />}
-            href="/services"
+            title="Ship Package"
             description="Send a package"
+            href="/services"
           />
-          <ActionCard 
-            title="Track" 
-            icon={<MapPin className="w-5 h-5" />} 
-            href="/track" 
+          <ActionCard
+            icon={<MapPin className="w-5 h-5" />}
+            title="Track"
             description="Track your shipment"
+            href="/track-shipment"
           />
           <ActionCard
-            title="Multi-Ship"
-            icon={<Globe className="w-5 h-5" />}
-            href="/multi-ship"
-            description="Send to multiple locations"
-          />
-          <ActionCard
-            title="Get a Quote"
             icon={<FileText className="w-5 h-5" />}
-            href="/quote"
+            title="Get a Quote"
             description="Calculate shipping costs"
+            href="/quote"
+          />
+          <ActionCard
+            icon={<Globe className="w-5 h-5" />}
+            title="Services"
+            description="Explore our services"
+            href="/services"
           />
         </div>
       </div>
