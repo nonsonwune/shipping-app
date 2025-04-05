@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { supabase } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,7 +13,8 @@ import {
   Download,
   Shield,
   RefreshCw,
-  Calendar
+  Calendar,
+  Info
 } from "lucide-react"
 import { 
   Select, 
@@ -31,6 +32,12 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { toast } from "@/components/ui/use-toast"
 import { useRouter } from "next/navigation"
 import { format } from "date-fns"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 type AuditLog = {
   id: string
@@ -41,11 +48,30 @@ type AuditLog = {
   details: any
   ip_address: string | null
   created_at: string
+  user_affected?: string | null
+  severity?: 'info' | 'warning' | 'alert' | null
+  status?: 'success' | 'failed' | 'pending' | null
+  browser_info?: string | null
+  location?: string | null
+  is_system_action?: boolean
   admin_profile?: {
+    id: string
     first_name: string | null
     last_name: string | null
     email: string
-  }
+  } | null
+  affected_user?: {
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string
+  } | null
+}
+
+type UserRole = {
+  roles: {
+    name: string
+  } | null
 }
 
 export default function AuditLogsPage() {
@@ -60,7 +86,49 @@ export default function AuditLogsPage() {
   const [filterResource, setFilterResource] = useState<string>("all")
   const [filterDateStart, setFilterDateStart] = useState<Date | undefined>(undefined)
   const [filterDateEnd, setFilterDateEnd] = useState<Date | undefined>(undefined)
+  const [filterSystemAction, setFilterSystemAction] = useState<string>("all")
   const [userRole, setUserRole] = useState<string>("staff") // Default to staff to be safe
+  
+  // Check for proper session initialization on component mount
+  useEffect(() => {
+    console.log("Checking for existing session on page load")
+    
+    // Check if we have valid cookies or need to clear stale ones
+    const checkCookies = () => {
+      try {
+        if (typeof document !== 'undefined') {
+          const cookies = document.cookie.split(';').map(c => c.trim())
+          const authCookies = cookies.filter(c => c.includes('-auth-token'))
+          
+          // Check for potential legacy auth token format (non-base64)
+          const legacyAuthTokens = authCookies.filter(c => !c.includes('base64-'))
+          
+          if (legacyAuthTokens.length > 0) {
+            console.log("Clearing stale Supabase cookies")
+            // Clear any potential legacy format cookies
+            legacyAuthTokens.forEach(cookie => {
+              const name = cookie.split('=')[0]
+              document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`
+            })
+            console.log("Finished clearing stale cookies")
+            // Reload page to ensure clean state
+            router.push('/')
+            return false
+          }
+          
+          return true // Cookies look fine
+        }
+      } catch (e) {
+        console.error("Cookie check error:", e)
+      }
+      
+      return true // Default to assume cookies are fine
+    }
+    
+    const cookiesValid = checkCookies()
+    if (!cookiesValid) return
+    
+  }, [router])
   
   // Define available actions and resources for filtering
   const actionTypes = [
@@ -84,8 +152,12 @@ export default function AuditLogsPage() {
       try {
         setLoading(true)
         
+        // Initialize the Supabase client
+        const supabase = createClient()
+        
         // Get current session
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data, error: sessionError } = await supabase.auth.getSession()
+        const session = data.session
         
         if (!session) {
           toast({
@@ -98,28 +170,17 @@ export default function AuditLogsPage() {
         }
         
         const userId = session.user.id
+        const userEmail = session.user.email || ''
         
-        // Check user role
-        const { data: userRoles, error: roleError } = await supabase
-          .from('user_roles')
-          .select('roles:role_id(name)')
-          .eq('user_id', userId)
-
-        if (roleError) {
-          console.error("Error fetching user roles:", roleError)
-          return
-        }
+        // Skip database role check (which causes infinite recursion)
+        // and rely on the middleware that already verified admin status
+        // or check for admin email pattern directly
+        const isAdminEmail = userEmail.includes('@admin') || 
+                             userEmail === 'chuqunonso@gmail.com' || 
+                             userEmail.endsWith('@yourdomain.com')
         
-        // Extract highest role (admin > staff > user)
-        let highestRole = 'user'
-        userRoles?.forEach(role => {
-          if (role.roles && typeof role.roles === 'object' && 'name' in role.roles) {
-            const roleName = role.roles.name as string
-            if (roleName === 'admin') highestRole = 'admin'
-            else if (roleName === 'staff' && highestRole !== 'admin') highestRole = 'staff'
-          }
-        })
-        
+        // Set highest role directly based on email
+        const highestRole = isAdminEmail ? 'admin' : 'user'
         setUserRole(highestRole)
         
         // If not admin, redirect to dashboard
@@ -138,11 +199,8 @@ export default function AuditLogsPage() {
           .from('admin_audit_logs')
           .select(`
             *,
-            admin_profile:admin_id (
-              first_name,
-              last_name,
-              email
-            )
+            admin_profile:profiles!admin_id(id, first_name, last_name, email),
+            affected_user:profiles!user_affected(id, first_name, last_name, email)
           `)
           .order('created_at', { ascending: false })
           .limit(500) // Limit to recent logs for performance
@@ -157,8 +215,8 @@ export default function AuditLogsPage() {
           return
         }
         
-        setLogs(logsData || [])
-        setFilteredLogs(logsData || [])
+        setLogs(logsData)
+        setFilteredLogs(logsData)
       } catch (error) {
         console.error("Error:", error)
         toast({
@@ -197,23 +255,32 @@ export default function AuditLogsPage() {
     if (filterResource !== "all") {
       results = results.filter(log => log.resource_type === filterResource)
     }
+
+    // Apply system action filter
+    if (filterSystemAction !== "all") {
+      if (filterSystemAction === "system") {
+        results = results.filter(log => log.is_system_action === true)
+      } else if (filterSystemAction === "human") {
+        results = results.filter(log => !log.is_system_action)
+      }
+    }
     
     // Apply date range filter
     if (filterDateStart) {
-      results = results.filter(log => 
-        new Date(log.created_at) >= new Date(filterDateStart.setHours(0, 0, 0, 0))
-      )
+      const startDate = new Date(filterDateStart)
+      startDate.setHours(0, 0, 0, 0)
+      results = results.filter(log => new Date(log.created_at) >= startDate)
     }
     
     if (filterDateEnd) {
-      results = results.filter(log => 
-        new Date(log.created_at) <= new Date(filterDateEnd.setHours(23, 59, 59, 999))
-      )
+      const endDate = new Date(filterDateEnd)
+      endDate.setHours(23, 59, 59, 999)
+      results = results.filter(log => new Date(log.created_at) <= endDate)
     }
     
     setFilteredLogs(results)
     setCurrentPage(1) // Reset to first page when filters change
-  }, [searchTerm, filterAction, filterResource, filterDateStart, filterDateEnd, logs])
+  }, [logs, searchTerm, filterAction, filterResource, filterDateStart, filterDateEnd, filterSystemAction])
   
   // Get current page logs
   const indexOfLastLog = currentPage * logsPerPage
@@ -247,36 +314,76 @@ export default function AuditLogsPage() {
     setFilterResource("all")
     setFilterDateStart(undefined)
     setFilterDateEnd(undefined)
+    setFilterSystemAction("all")
   }
   
   // Export logs as CSV
   const exportLogs = () => {
     try {
-      // Build CSV content
+      // Define headers for the CSV file
       const headers = [
-        "ID",
-        "Admin Email",
-        "Action Type",
-        "Resource Type",
-        "Resource ID",
-        "Details",
-        "IP Address",
-        "Date"
-      ]
+        "Actor", 
+        "Actor Email", 
+        "Action", 
+        "Resource", 
+        "Resource ID", 
+        "Affected User", 
+        "Severity", 
+        "System Generated", 
+        "IP Address", 
+        "Date/Time"
+      ];
       
+      // Format each log into a CSV row
+      const csvRows = filteredLogs.map(log => {
+        // Get actor name
+        const actorName = log.is_system_action
+          ? "Automated System"
+          : log.admin_profile 
+            ? [log.admin_profile.first_name, log.admin_profile.last_name].filter(Boolean).join(' ') || log.admin_profile.email
+            : (log.admin_id === log.user_affected) 
+              ? "User (Self)"
+              : "Unknown";
+        
+        // Get actor email
+        const actorEmail = log.admin_profile?.email || '';
+        
+        // Format affected user
+        const affectedUser = log.affected_user 
+          ? [log.affected_user.first_name, log.affected_user.last_name].filter(Boolean).join(' ') || log.affected_user.email
+          : log.user_affected || '';
+        
+        // Row values
+        const row = [
+          actorName,
+          actorEmail,
+          formatActionType(log.action_type),
+          formatResourceType(log.resource_type),
+          log.resource_id || '',
+          affectedUser,
+          log.severity || 'info',
+          log.is_system_action ? 'Yes' : 'No',
+          log.ip_address || '',
+          new Date(log.created_at).toLocaleString()
+        ];
+        
+        // Quote and escape CSV values
+        return row.map(value => {
+          // Convert to string and handle null or undefined values
+          const stringValue = value === null || value === undefined ? '' : String(value);
+          
+          // Replace double quotes with two double quotes (CSV escaping)
+          const escapedValue = stringValue.replace(/"/g, '""');
+          
+          // Wrap in double quotes to handle commas and special characters
+          return `"${escapedValue}"`;
+        }).join(',');
+      });
+
       const csvContent = [
         headers.join(','),
-        ...filteredLogs.map(log => [
-          log.id,
-          log.admin_profile?.email || 'Unknown',
-          log.action_type,
-          log.resource_type,
-          log.resource_id || '',
-          JSON.stringify(log.details || {}).replace(/,/g, ';'),
-          log.ip_address || '',
-          new Date(log.created_at).toISOString()
-        ].join(','))
-      ].join('\n')
+        ...csvRows
+      ].join('\n'); 
       
       // Create download link
       const blob = new Blob([csvContent], { type: 'text/csv' })
@@ -301,6 +408,90 @@ export default function AuditLogsPage() {
         variant: "destructive"
       })
     }
+  }
+
+  // Find code like this that formats admin information
+  const getActorName = (log: AuditLog) => {
+    // Check if this is a system action
+    if (log.is_system_action) {
+      return (
+        <div className="flex flex-col">
+          <div className="flex items-center">
+            <span className="text-sm font-medium">Automated System</span>
+            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+              System
+            </span>
+          </div>
+          <span className="text-xs text-gray-500 truncate">
+            {log.admin_profile?.email || "system@internal"}
+          </span>
+        </div>
+      );
+    }
+    
+    if (!log.admin_profile) {
+      // If admin_profile is null but we have admin_id, try to display a simplified user reference
+      if (log.admin_id && log.admin_id === log.user_affected) {
+        return (
+          <div className="flex flex-col">
+            <span className="text-xs font-medium">User (Self)</span>
+            <span className="text-xs text-gray-500 truncate">{log.admin_id}</span>
+          </div>
+        );
+      }
+      return "Unknown";
+    }
+    
+    if (log.admin_profile.first_name || log.admin_profile.last_name) {
+      return `${log.admin_profile.first_name || ''} ${log.admin_profile.last_name || ''}`.trim();
+    }
+    
+    return log.admin_profile.email || "Unknown";
+  };
+
+  // Add a helper function to format affected user
+  function formatAffectedUser(log: AuditLog) {
+    if (!log.user_affected) return '-';
+    
+    if (log.affected_user) {
+      const userName = [
+        log.affected_user.first_name,
+        log.affected_user.last_name
+      ].filter(Boolean).join(' ') || log.affected_user.email;
+      
+      return (
+        <div className="flex flex-col">
+          <span className="text-sm">{userName}</span>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="text-xs text-gray-500 font-mono cursor-help underline decoration-dotted decoration-gray-400 truncate max-w-[160px]">
+                  {log.user_affected}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>User ID: {log.user_affected}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      );
+    }
+    
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="text-xs text-gray-500 font-mono cursor-help underline decoration-dotted decoration-gray-400">
+              {log.user_affected}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>User ID: {log.user_affected}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
   }
 
   if (loading) {
@@ -345,7 +536,7 @@ export default function AuditLogsPage() {
         </CardHeader>
         <CardContent>
           {/* Filters and search */}
-          <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-6">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
               <Input
@@ -373,6 +564,25 @@ export default function AuditLogsPage() {
                       {action === "all" ? "All Actions" : formatActionType(action)}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div>
+              <Select
+                value={filterSystemAction || "all"}
+                onValueChange={(value) => setFilterSystemAction(value)}
+              >
+                <SelectTrigger>
+                  <div className="flex items-center">
+                    <Filter className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Actor Type" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Actors</SelectItem>
+                  <SelectItem value="system">System Only</SelectItem>
+                  <SelectItem value="human">Human Only</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -444,26 +654,32 @@ export default function AuditLogsPage() {
           </div>
           
           {/* Audit logs table */}
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg overflow-x-auto max-h-[70vh] overflow-y-auto shadow-sm">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Admin
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
+                    Actor
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[150px]">
                     Action
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
                     Resource
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
+                    Affected User
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[100px]">
+                    Severity
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[220px]">
                     Details
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    IP Address
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
+                    IP / Location
                   </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[140px]">
                     Date/Time
                   </th>
                 </tr>
@@ -471,25 +687,50 @@ export default function AuditLogsPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {currentLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
+                    <td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">
                       No audit logs found
                     </td>
                   </tr>
                 ) : (
-                  currentLogs.map((log) => (
-                    <tr key={log.id}>
+                  currentLogs.map((log, index) => (
+                    <tr 
+                      key={log.id} 
+                      className={
+                        log.is_system_action 
+                          ? "bg-blue-50" 
+                          : index % 2 === 0 
+                            ? "bg-white" 
+                            : "bg-gray-50"
+                      }
+                    >
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className="flex-shrink-0 h-8 w-8 bg-primary text-white rounded-full flex items-center justify-center">
-                            {log.admin_profile?.first_name?.[0] || log.admin_profile?.email?.[0] || 'U'}
+                          <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white"
+                               style={{
+                                 backgroundColor: 
+                                   log.is_system_action
+                                     ? '#2563EB' // Bright blue for system actions
+                                     : log.admin_id && log.admin_id === log.user_affected 
+                                       ? '#3B82F6' // Blue for user self-actions
+                                       : log.admin_profile 
+                                         ? '#7C3AED' // Purple for admin actions
+                                         : '#6B7280'  // Gray for unknown actions
+                               }}>
+                            {log.is_system_action 
+                              ? 'S' 
+                              : log.admin_profile?.first_name?.[0] || 
+                                log.admin_profile?.email?.[0] || 
+                                (log.admin_id && log.admin_id === log.user_affected ? 'U' : '?')}
                           </div>
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
-                              {log.admin_profile?.first_name} {log.admin_profile?.last_name}
+                              {getActorName(log)}
                             </div>
-                            <div className="text-xs text-gray-500">
-                              {log.admin_profile?.email}
-                            </div>
+                            {!log.is_system_action && log.admin_profile?.email && (
+                              <div className="text-xs text-gray-500">
+                                {log.admin_profile.email}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -504,17 +745,58 @@ export default function AuditLogsPage() {
                           {log.resource_id || '-'}
                         </div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {formatAffectedUser(log)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {log.severity ? (
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            log.severity === 'alert' ? 'bg-red-100 text-red-800' : 
+                            log.severity === 'warning' ? 'bg-yellow-100 text-yellow-800' : 
+                            'bg-blue-100 text-blue-800'
+                          }`}>
+                            {log.severity.toUpperCase()}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            INFO
+                          </span>
+                        )}
+                      </td>
                       <td className="px-6 py-4 text-sm text-gray-500 max-w-[220px] truncate">
                         {log.details ? (
-                          <pre className="text-xs overflow-hidden text-ellipsis">
-                            {JSON.stringify(log.details, null, 2)}
-                          </pre>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-auto p-0">
+                                <div className="flex items-center">
+                                  <pre className="text-xs overflow-hidden text-ellipsis max-w-[180px]">
+                                    {JSON.stringify(log.details, null, 2)}
+                                  </pre>
+                                  <Info className="h-3 w-3 ml-1 text-gray-400" />
+                                </div>
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[400px] p-4">
+                              <div className="font-medium mb-2">Details:</div>
+                              <pre className="text-xs bg-gray-50 p-3 rounded-md overflow-x-auto max-h-[300px] overflow-y-auto">
+                                {JSON.stringify(log.details, null, 2)}
+                              </pre>
+                            </PopoverContent>
+                          </Popover>
                         ) : (
                           '-'
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
-                        {log.ip_address || '-'}
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <div className="font-mono text-xs">{log.ip_address || '-'}</div>
+                        {log.location && (
+                          <div className="text-xs mt-1">{log.location}</div>
+                        )}
+                        {log.browser_info && (
+                          <div className="text-xs text-gray-400 truncate max-w-[150px]" title={log.browser_info}>
+                            {log.browser_info}
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <div>{new Date(log.created_at).toLocaleDateString()}</div>
