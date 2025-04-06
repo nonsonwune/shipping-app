@@ -57,19 +57,39 @@ export async function POST(request: NextRequest) {
       console.log('Attempting token-based authentication for shipment creation...');
       const token = authHeader.replace('Bearer ', '');
       
+      // Log token information for debugging (first few chars only for security)
+      console.log(`Token received (truncated): ${token.substring(0, 10)}...`);
+      
       try {
         // Initialize admin client
         adminClient = createAdminClient(); 
         
-        const { data, error } = await adminClient.auth.getUser(token);
-        
-        if (error) {
-          console.error('Token authentication error:', error);
-          // If token is invalid, treat as unauthorized
-          return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-        } else if (data.user) {
-          userId = data.user.id;
-          console.log('User authenticated via token for shipment creation:', userId);
+        // Improved error handling for token verification
+        try {
+          const { data, error } = await adminClient.auth.getUser(token);
+          
+          if (error) {
+            console.error('Token authentication error:', error.message);
+            // If token is invalid, treat as unauthorized
+            return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+          } else if (data.user) {
+            userId = data.user.id;
+            console.log('User authenticated via token for shipment creation:', userId);
+          }
+        } catch (tokenVerifyError) {
+          console.error('Token verification error:', tokenVerifyError);
+          
+          // Try alternate authentication if token verification fails
+          console.log('Attempting to get session directly...');
+          const { data: sessionData } = await adminClient.auth.getSession();
+          
+          if (sessionData.session?.user) {
+            userId = sessionData.session.user.id;
+            console.log('User authenticated via session for shipment creation:', userId);
+          } else {
+            console.error('Session authentication failed, no user found');
+            return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+          }
         }
       } catch (tokenError) {
         console.error('Token processing error:', tokenError);

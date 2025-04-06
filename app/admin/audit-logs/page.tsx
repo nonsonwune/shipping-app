@@ -42,30 +42,17 @@ import {
 type AuditLog = {
   id: string
   admin_id: string
-  action_type: string
-  resource_type: string
+  action: string  // Corresponds to TG_OP (INSERT, UPDATE, DELETE)
+  resource: string // Corresponds to TG_TABLE_NAME
   resource_id: string | null
   details: any
   ip_address: string | null
   created_at: string
-  user_affected?: string | null
-  severity?: 'info' | 'warning' | 'alert' | null
-  status?: 'success' | 'failed' | 'pending' | null
-  browser_info?: string | null
-  location?: string | null
-  is_system_action?: boolean
-  admin_profile?: {
-    id: string
-    first_name: string | null
-    last_name: string | null
-    email: string
-  } | null
-  affected_user?: {
-    id: string
-    first_name: string | null
-    last_name: string | null
-    email: string
-  } | null
+  is_system_action: boolean
+  actor_email: string | null
+  actor_name: string | null
+  execution_type: string // 'Automated System' or 'Human Admin'
+  execution_type_class: string // CSS classes for styling
 }
 
 type UserRole = {
@@ -152,10 +139,7 @@ export default function AuditLogsPage() {
       try {
         setLoading(true)
         
-        // Initialize the Supabase client
         const supabase = createClient()
-        
-        // Get current session
         const { data, error: sessionError } = await supabase.auth.getSession()
         const session = data.session
         
@@ -169,21 +153,14 @@ export default function AuditLogsPage() {
           return
         }
         
-        const userId = session.user.id
         const userEmail = session.user.email || ''
-        
-        // Skip database role check (which causes infinite recursion)
-        // and rely on the middleware that already verified admin status
-        // or check for admin email pattern directly
         const isAdminEmail = userEmail.includes('@admin') || 
                              userEmail === 'chuqunonso@gmail.com' || 
                              userEmail.endsWith('@yourdomain.com')
         
-        // Set highest role directly based on email
         const highestRole = isAdminEmail ? 'admin' : 'user'
         setUserRole(highestRole)
         
-        // If not admin, redirect to dashboard
         if (highestRole !== 'admin') {
           toast({
             title: "Access Denied",
@@ -194,19 +171,15 @@ export default function AuditLogsPage() {
           return
         }
         
-        // Fetch audit logs with admin profile info
+        // Fetch logs from the VIEW instead of the table
         const { data: logsData, error: logsError } = await supabase
-          .from('admin_audit_logs')
-          .select(`
-            *,
-            admin_profile:profiles!admin_id(id, first_name, last_name, email),
-            affected_user:profiles!user_affected(id, first_name, last_name, email)
-          `)
+          .from('admin_audit_logs_view') // Use the view name
+          .select('*') // Select all columns from the view
           .order('created_at', { ascending: false })
-          .limit(500) // Limit to recent logs for performance
+          .limit(500)
         
         if (logsError) {
-          console.error("Error fetching audit logs:", logsError)
+          console.error("Error fetching audit logs from view:", logsError)
           toast({
             title: "Error",
             description: "Failed to fetch audit logs",
@@ -215,8 +188,11 @@ export default function AuditLogsPage() {
           return
         }
         
-        setLogs(logsData)
-        setFilteredLogs(logsData)
+        // Explicitly cast the data to the updated AuditLog type
+        const typedLogsData = logsData as AuditLog[]
+        
+        setLogs(typedLogsData)
+        setFilteredLogs(typedLogsData)
       } catch (error) {
         console.error("Error:", error)
         toast({
@@ -236,27 +212,28 @@ export default function AuditLogsPage() {
   useEffect(() => {
     let results = [...logs]
     
-    // Apply search filter
+    // Apply search filter (include actor_name and actor_email)
     if (searchTerm) {
       results = results.filter(log => 
         log.resource_id?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        log.admin_profile?.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.actor_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        log.actor_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         log.ip_address?.includes(searchTerm) ||
         JSON.stringify(log.details).toLowerCase().includes(searchTerm.toLowerCase())
       )
     }
     
-    // Apply action type filter
+    // Apply action type filter (using the 'action' column from the view)
     if (filterAction !== "all") {
-      results = results.filter(log => log.action_type === filterAction)
+      results = results.filter(log => log.action.toLowerCase() === filterAction.toLowerCase())
     }
     
-    // Apply resource type filter
+    // Apply resource type filter (using the 'resource' column from the view)
     if (filterResource !== "all") {
-      results = results.filter(log => log.resource_type === filterResource)
+      results = results.filter(log => log.resource.toLowerCase() === filterResource.toLowerCase())
     }
 
-    // Apply system action filter
+    // Apply system action filter (using 'is_system_action' from the view)
     if (filterSystemAction !== "all") {
       if (filterSystemAction === "system") {
         results = results.filter(log => log.is_system_action === true)
@@ -320,62 +297,33 @@ export default function AuditLogsPage() {
   // Export logs as CSV
   const exportLogs = () => {
     try {
-      // Define headers for the CSV file
       const headers = [
-        "Actor", 
+        "Actor Name", 
         "Actor Email", 
         "Action", 
         "Resource", 
         "Resource ID", 
-        "Affected User", 
-        "Severity", 
-        "System Generated", 
+        // "Affected User", // This info is often in details JSON now
+        "Execution Type", 
         "IP Address", 
         "Date/Time"
       ];
       
-      // Format each log into a CSV row
       const csvRows = filteredLogs.map(log => {
-        // Get actor name
-        const actorName = log.is_system_action
-          ? "Automated System"
-          : log.admin_profile 
-            ? [log.admin_profile.first_name, log.admin_profile.last_name].filter(Boolean).join(' ') || log.admin_profile.email
-            : (log.admin_id === log.user_affected) 
-              ? "User (Self)"
-              : "Unknown";
-        
-        // Get actor email
-        const actorEmail = log.admin_profile?.email || '';
-        
-        // Format affected user
-        const affectedUser = log.affected_user 
-          ? [log.affected_user.first_name, log.affected_user.last_name].filter(Boolean).join(' ') || log.affected_user.email
-          : log.user_affected || '';
-        
-        // Row values
         const row = [
-          actorName,
-          actorEmail,
-          formatActionType(log.action_type),
-          formatResourceType(log.resource_type),
+          log.actor_name || 'N/A',
+          log.actor_email || 'N/A',
+          log.action, // Direct from view
+          log.resource, // Direct from view
           log.resource_id || '',
-          affectedUser,
-          log.severity || 'info',
-          log.is_system_action ? 'Yes' : 'No',
+          log.execution_type, // 'Automated System' or 'Human Admin'
           log.ip_address || '',
           new Date(log.created_at).toLocaleString()
         ];
         
-        // Quote and escape CSV values
         return row.map(value => {
-          // Convert to string and handle null or undefined values
           const stringValue = value === null || value === undefined ? '' : String(value);
-          
-          // Replace double quotes with two double quotes (CSV escaping)
           const escapedValue = stringValue.replace(/"/g, '""');
-          
-          // Wrap in double quotes to handle commas and special characters
           return `"${escapedValue}"`;
         }).join(',');
       });
@@ -410,90 +358,6 @@ export default function AuditLogsPage() {
     }
   }
 
-  // Find code like this that formats admin information
-  const getActorName = (log: AuditLog) => {
-    // Check if this is a system action
-    if (log.is_system_action) {
-      return (
-        <div className="flex flex-col">
-          <div className="flex items-center">
-            <span className="text-sm font-medium">Automated System</span>
-            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-              System
-            </span>
-          </div>
-          <span className="text-xs text-gray-500 truncate">
-            {log.admin_profile?.email || "system@internal"}
-          </span>
-        </div>
-      );
-    }
-    
-    if (!log.admin_profile) {
-      // If admin_profile is null but we have admin_id, try to display a simplified user reference
-      if (log.admin_id && log.admin_id === log.user_affected) {
-        return (
-          <div className="flex flex-col">
-            <span className="text-xs font-medium">User (Self)</span>
-            <span className="text-xs text-gray-500 truncate">{log.admin_id}</span>
-          </div>
-        );
-      }
-      return "Unknown";
-    }
-    
-    if (log.admin_profile.first_name || log.admin_profile.last_name) {
-      return `${log.admin_profile.first_name || ''} ${log.admin_profile.last_name || ''}`.trim();
-    }
-    
-    return log.admin_profile.email || "Unknown";
-  };
-
-  // Add a helper function to format affected user
-  function formatAffectedUser(log: AuditLog) {
-    if (!log.user_affected) return '-';
-    
-    if (log.affected_user) {
-      const userName = [
-        log.affected_user.first_name,
-        log.affected_user.last_name
-      ].filter(Boolean).join(' ') || log.affected_user.email;
-      
-      return (
-        <div className="flex flex-col">
-          <span className="text-sm">{userName}</span>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="text-xs text-gray-500 font-mono cursor-help underline decoration-dotted decoration-gray-400 truncate max-w-[160px]">
-                  {log.user_affected}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>User ID: {log.user_affected}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      );
-    }
-    
-    return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="text-xs text-gray-500 font-mono cursor-help underline decoration-dotted decoration-gray-400">
-              {log.user_affected}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>User ID: {log.user_affected}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-10rem)]">
@@ -516,8 +380,8 @@ export default function AuditLogsPage() {
             </CardDescription>
           </div>
           <div className="flex gap-2">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               size="sm"
               onClick={clearFilters}
             >
@@ -537,6 +401,7 @@ export default function AuditLogsPage() {
         <CardContent>
           {/* Filters and search */}
           <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-6">
+            {/* Search Filter */}
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
               <Input
@@ -546,7 +411,7 @@ export default function AuditLogsPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            
+            {/* Action Filter */}
             <div>
               <Select
                 value={filterAction}
@@ -567,237 +432,182 @@ export default function AuditLogsPage() {
                 </SelectContent>
               </Select>
             </div>
-            
-            <div>
-              <Select
-                value={filterSystemAction || "all"}
-                onValueChange={(value) => setFilterSystemAction(value)}
-              >
-                <SelectTrigger>
-                  <div className="flex items-center">
-                    <Filter className="h-4 w-4 mr-2" />
-                    <SelectValue placeholder="Actor Type" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Actors</SelectItem>
-                  <SelectItem value="system">System Only</SelectItem>
-                  <SelectItem value="human">Human Only</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div>
-              <Select
-                value={filterResource}
-                onValueChange={setFilterResource}
-              >
-                <SelectTrigger>
-                  <div className="flex items-center">
-                    <Filter className="h-4 w-4 mr-2" />
-                    <SelectValue placeholder="Resource Type" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  {resourceTypes.map(resource => (
-                    <SelectItem key={resource} value={resource}>
-                      {resource === "all" ? "All Resources" : formatResourceType(resource)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start text-left font-normal"
-                  >
-                    <Calendar className="h-4 w-4 mr-2" />
-                    {filterDateStart ? format(filterDateStart, 'PPP') : 'Start Date'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <CalendarComponent
-                    mode="single"
-                    selected={filterDateStart}
-                    onSelect={setFilterDateStart}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-            
-            <div>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start text-left font-normal"
-                  >
-                    <Calendar className="h-4 w-4 mr-2" />
-                    {filterDateEnd ? format(filterDateEnd, 'PPP') : 'End Date'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <CalendarComponent
-                    mode="single"
-                    selected={filterDateEnd}
-                    onSelect={setFilterDateEnd}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-          
+            {/* Actor Type Filter */}
+             <div>
+               <Select
+                 value={filterSystemAction || "all"}
+                 onValueChange={(value) => setFilterSystemAction(value)}
+               >
+                 <SelectTrigger>
+                   <div className="flex items-center">
+                     <Filter className="h-4 w-4 mr-2" />
+                     <SelectValue placeholder="Actor Type" />
+                   </div>
+                 </SelectTrigger>
+                 <SelectContent>
+                   <SelectItem value="all">All Actors</SelectItem>
+                   <SelectItem value="system">System Only</SelectItem>
+                   <SelectItem value="human">Human Only</SelectItem>
+                 </SelectContent>
+               </Select>
+             </div>
+             {/* Resource Filter */}
+              <div>
+               <Select
+                 value={filterResource}
+                 onValueChange={setFilterResource}
+               >
+                 <SelectTrigger>
+                   <div className="flex items-center">
+                     <Filter className="h-4 w-4 mr-2" />
+                     <SelectValue placeholder="Resource Type" />
+                   </div>
+                 </SelectTrigger>
+                 <SelectContent>
+                   {resourceTypes.map(resource => (
+                     <SelectItem key={resource} value={resource}>
+                       {resource === "all" ? "All Resources" : formatResourceType(resource)}
+                     </SelectItem>
+                   ))}
+                 </SelectContent>
+               </Select>
+             </div>
+             {/* Start Date Filter */}
+             <div>
+               <Popover>
+                 <PopoverTrigger asChild>
+                   <Button
+                     variant="outline"
+                     className="w-full justify-start text-left font-normal"
+                   >
+                     <Calendar className="h-4 w-4 mr-2" />
+                     {filterDateStart ? format(filterDateStart, 'PPP') : 'Start Date'}
+                   </Button>
+                 </PopoverTrigger>
+                 <PopoverContent className="w-auto p-0">
+                   <CalendarComponent
+                     mode="single"
+                     selected={filterDateStart}
+                     onSelect={setFilterDateStart}
+                     initialFocus
+                   />
+                 </PopoverContent>
+               </Popover>
+             </div>
+             {/* End Date Filter */}
+             <div>
+               <Popover>
+                 <PopoverTrigger asChild>
+                   <Button
+                     variant="outline"
+                     className="w-full justify-start text-left font-normal"
+                   >
+                     <Calendar className="h-4 w-4 mr-2" />
+                     {filterDateEnd ? format(filterDateEnd, 'PPP') : 'End Date'}
+                   </Button>
+                 </PopoverTrigger>
+                 <PopoverContent className="w-auto p-0">
+                   <CalendarComponent
+                     mode="single"
+                     selected={filterDateEnd}
+                     onSelect={setFilterDateEnd}
+                     initialFocus
+                   />
+                 </PopoverContent>
+               </Popover>
+             </div>
+          </div> {/* Closing div for filters grid */}
+
           {/* Audit logs table */}
           <div className="border rounded-lg overflow-x-auto max-h-[70vh] overflow-y-auto shadow-sm">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
-                    Actor
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[150px]">
-                    Action
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
-                    Resource
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
-                    Affected User
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[100px]">
-                    Severity
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[220px]">
-                    Details
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">
-                    IP / Location
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[140px]">
-                    Date/Time
-                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">Actor</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[150px]">Action</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">Resource</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[220px]">Details</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[180px]">IP / Location</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[140px]">Date/Time</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {currentLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">
+                    <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500"> {/* Adjusted colSpan */}
                       No audit logs found
                     </td>
                   </tr>
                 ) : (
                   currentLogs.map((log, index) => (
-                    <tr 
-                      key={log.id} 
-                      className={
-                        log.is_system_action 
-                          ? "bg-blue-50" 
-                          : index % 2 === 0 
-                            ? "bg-white" 
-                            : "bg-gray-50"
-                      }
+                    <tr
+                      key={log.id}
+                      className={log.execution_type_class || (index % 2 === 0 ? "bg-white" : "bg-gray-50")} // Use class from view
                     >
+                      {/* Actor Column */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white"
-                               style={{
-                                 backgroundColor: 
-                                   log.is_system_action
-                                     ? '#2563EB' // Bright blue for system actions
-                                     : log.admin_id && log.admin_id === log.user_affected 
-                                       ? '#3B82F6' // Blue for user self-actions
-                                       : log.admin_profile 
-                                         ? '#7C3AED' // Purple for admin actions
-                                         : '#6B7280'  // Gray for unknown actions
-                               }}>
-                            {log.is_system_action 
-                              ? 'S' 
-                              : log.admin_profile?.first_name?.[0] || 
-                                log.admin_profile?.email?.[0] || 
-                                (log.admin_id && log.admin_id === log.user_affected ? 'U' : '?')}
-                          </div>
-                          <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {getActorName(log)}
-                            </div>
-                            {!log.is_system_action && log.admin_profile?.email && (
-                              <div className="text-xs text-gray-500">
-                                {log.admin_profile.email}
-                              </div>
-                            )}
-                          </div>
+                           <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white ${log.is_system_action ? 'bg-blue-600' : 'bg-purple-600'}`}>
+                             {log.is_system_action ? 'S' : (log.actor_name?.[0] || '?')}
+                           </div>
+                           <div className="ml-4">
+                             <div className="text-sm font-medium text-gray-900">
+                               {log.actor_name || 'Unknown'}
+                               {log.is_system_action && (
+                                 <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                   System
+                                 </span>
+                               )}
+                             </div>
+                             <div className="text-xs text-gray-500">
+                               {log.actor_email || 'N/A'}
+                             </div>
+                           </div>
                         </div>
                       </td>
+                      {/* Action Column */}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatActionType(log.action_type)}
+                         {formatActionType(log.action)} {/* Use 'action' from view */}
                       </td>
+                      {/* Resource Column */}
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {formatResourceType(log.resource_type)}
-                        </div>
-                        <div className="text-xs text-gray-500 font-mono">
-                          {log.resource_id || '-'}
-                        </div>
+                         <div className="text-sm text-gray-900">
+                           {formatResourceType(log.resource)} {/* Use 'resource' from view */}
+                         </div>
+                         <div className="text-xs text-gray-500 font-mono">
+                           {log.resource_id || '-'}
+                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatAffectedUser(log)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {log.severity ? (
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            log.severity === 'alert' ? 'bg-red-100 text-red-800' : 
-                            log.severity === 'warning' ? 'bg-yellow-100 text-yellow-800' : 
-                            'bg-blue-100 text-blue-800'
-                          }`}>
-                            {log.severity.toUpperCase()}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                            INFO
-                          </span>
-                        )}
-                      </td>
+                      {/* Details Column */}
                       <td className="px-6 py-4 text-sm text-gray-500 max-w-[220px] truncate">
-                        {log.details ? (
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-auto p-0">
-                                <div className="flex items-center">
-                                  <pre className="text-xs overflow-hidden text-ellipsis max-w-[180px]">
-                                    {JSON.stringify(log.details, null, 2)}
-                                  </pre>
-                                  <Info className="h-3 w-3 ml-1 text-gray-400" />
-                                </div>
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[400px] p-4">
-                              <div className="font-medium mb-2">Details:</div>
-                              <pre className="text-xs bg-gray-50 p-3 rounded-md overflow-x-auto max-h-[300px] overflow-y-auto">
-                                {JSON.stringify(log.details, null, 2)}
-                              </pre>
-                            </PopoverContent>
-                          </Popover>
-                        ) : (
-                          '-'
-                        )}
+                         {log.details ? (
+                           <Popover>
+                             <PopoverTrigger asChild>
+                               <Button variant="ghost" size="sm" className="h-auto p-0">
+                                 <div className="flex items-center">
+                                   <pre className="text-xs overflow-hidden text-ellipsis max-w-[180px]">
+                                     {JSON.stringify(log.details, null, 2)}
+                                   </pre>
+                                   <Info className="h-3 w-3 ml-1 text-gray-400" />
+                                 </div>
+                               </Button>
+                             </PopoverTrigger>
+                             <PopoverContent className="w-[400px] p-4">
+                               <div className="font-medium mb-2">Details:</div>
+                               <pre className="text-xs bg-gray-50 p-3 rounded-md overflow-x-auto max-h-[300px] overflow-y-auto">
+                                 {JSON.stringify(log.details, null, 2)}
+                               </pre>
+                             </PopoverContent>
+                           </Popover>
+                         ) : (
+                           '-'
+                         )}
                       </td>
+                      {/* IP / Location Column */}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <div className="font-mono text-xs">{log.ip_address || '-'}</div>
-                        {log.location && (
-                          <div className="text-xs mt-1">{log.location}</div>
-                        )}
-                        {log.browser_info && (
-                          <div className="text-xs text-gray-400 truncate max-w-[150px]" title={log.browser_info}>
-                            {log.browser_info}
-                          </div>
-                        )}
+                         <div className="font-mono text-xs">{log.ip_address || '-'}</div>
                       </td>
+                      {/* Date/Time Column */}
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <div>{new Date(log.created_at).toLocaleDateString()}</div>
                         <div className="text-xs">
@@ -807,10 +617,10 @@ export default function AuditLogsPage() {
                     </tr>
                   ))
                 )}
-              </tbody>
-            </table>
-          </div>
-          
+              </tbody> {/* Closing tbody */}
+            </table> {/* Closing table */}
+          </div> {/* Closing div for table container */}
+
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-4">
@@ -854,8 +664,8 @@ export default function AuditLogsPage() {
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-    </div>
-  )
+        </CardContent> {/* Closing CardContent */}
+      </Card> {/* Closing Card */}
+    </div> /* Closing main container div */
+  );
 }

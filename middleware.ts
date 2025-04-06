@@ -170,8 +170,61 @@ export async function middleware(req: NextRequest) {
       cookies: {
         async get(name: string) {
           try {
+            console.log(`COOKIE_DEBUG - Reading cookie: ${name}, Raw value exists: ${!!req.cookies.get(name)?.value}`);
+            
+            // Special handling for auth token cookies that might be split across multiple cookies
+            if (name.includes('-auth-token') && !name.includes('.')) {
+              // Check if this is a base auth token that might be split
+              const baseName = name;
+              
+              // First try to get the cookie directly
+              const directValue = req.cookies.get(baseName)?.value;
+              if (directValue) {
+                return directValue;
+              }
+              
+              // If not found, try to piece together split cookies
+              const allCookies = req.cookies.getAll();
+              const relevantCookies = allCookies
+                .filter(c => c.name.startsWith(`${baseName}.`))
+                .sort((a, b) => {
+                  const aIndex = parseInt(a.name.split('.').pop() || '0');
+                  const bIndex = parseInt(b.name.split('.').pop() || '0');
+                  return aIndex - bIndex;
+                });
+              
+              if (relevantCookies.length > 0) {
+                console.log(`COOKIE_DEBUG - Found ${relevantCookies.length} split cookies for ${baseName}`);
+                // Merge split cookies
+                const combinedValue = relevantCookies.map(c => c.value || '').join('');
+                
+                if (combinedValue) {
+                  console.log(`COOKIE_DEBUG - Combined ${relevantCookies.length} split cookies for ${baseName}`);
+                  
+                  // Handle base64 encoding if present
+                  if (combinedValue.startsWith('base64-')) {
+                    console.log(`COOKIE_DEBUG - Found base64 prefix for combined cookie`);
+                    try {
+                      const base64Part = combinedValue.substring(7);
+                      const decoded = Buffer.from(base64Part, 'base64').toString('utf-8');
+                      console.log(`COOKIE_DEBUG - Decoded combined base64 cookie successfully`);
+                      return decoded;
+                    } catch (decodeError) {
+                      console.error(`COOKIE_DEBUG - Failed to decode combined base64 cookie:`, decodeError);
+                    }
+                  }
+                  
+                  return combinedValue;
+                }
+              } else {
+                console.log(`COOKIE_DEBUG - No split cookies found for ${baseName}`);
+              }
+              
+              return undefined;
+            }
+            
+            // Regular cookie handling for non-auth-token cookies or explicitly indexed ones
             const value = req.cookies.get(name)?.value;
-            console.log(`COOKIE_DEBUG - Reading cookie: ${name}, Raw value exists: ${!!value}`);
             if (!value) return undefined;
 
             // --- START FIX for base64 prefix & DECODING ---
@@ -185,8 +238,6 @@ export async function middleware(req: NextRequest) {
                 console.log(`COOKIE_DEBUG (Middleware) - Successfully decoded base64 for cookie: ${name}`);
               } catch (decodeError) {
                 console.error(`COOKIE_DEBUG (Middleware) - Failed to decode base64 for cookie ${name}:`, decodeError);
-                // If decoding fails, maybe return undefined or the raw value? Let's return undefined for now.
-                // Alternatively, could return the original value without prefix? processedValue = value.substring(7);
                 return undefined; 
               }
             }

@@ -52,12 +52,74 @@ export default function SignUpPage() {
       return
     }
 
+    // Enhanced input validation
+    const validateInput = () => {
+      // Email validation with regex
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(formData.email)) {
+        setError("Please enter a valid email address");
+        return false;
+      }
+
+      // Password validation - at least 8 chars, with numbers and letters
+      if (formData.password.length < 8) {
+        setError("Password must be at least 8 characters long");
+        return false;
+      }
+
+      const hasLetter = /[a-zA-Z]/.test(formData.password);
+      const hasNumber = /\d/.test(formData.password);
+      if (!hasLetter || !hasNumber) {
+        setError("Password must contain both letters and numbers");
+        return false;
+      }
+
+      // Name validation - prevent special characters that could be used for injection
+      const nameRegex = /^[a-zA-Z\s'-]+$/;
+      if (!nameRegex.test(formData.firstName) || !nameRegex.test(formData.lastName)) {
+        setError("Names can only contain letters, spaces, hyphens, and apostrophes");
+        return false;
+      }
+
+      // Phone validation - allow only numbers, +, and hyphens
+      const phoneRegex = /^[0-9+\-\s()]+$/;
+      if (!phoneRegex.test(formData.phone)) {
+        setError("Phone number can only contain digits, +, -, spaces, and parentheses");
+        return false;
+      }
+
+      return true;
+    };
+
+    if (!validateInput()) {
+      return;
+    }
+
     setError(null)
     setLoading(true)
 
     try {
+      console.log("🔍 DEBUG: Starting sign-up process with data:", {
+        email: formData.email,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        accountType: formData.accountType,
+        // Omitting password for security
+      });
+      
       // For development, we'll create a user with automatic confirmation
       const supabase = createBrowserClient();
+      console.log("🔍 DEBUG: Supabase client created");
+      
+      // First, attempt to check if the auth API is reachable
+      try {
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        console.log("🔍 DEBUG: Auth API test result:", sessionError ? "Error" : "Success", sessionError);
+      } catch (sessionTestError) {
+        console.error("🔍 DEBUG: Auth API test failed completely:", sessionTestError);
+      }
+
+      console.log("🔍 DEBUG: Calling auth.signUp");
       const { data, error } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -75,21 +137,49 @@ export default function SignUpPage() {
       })
 
       if (error) {
+        console.error("🔍 DEBUG: Sign-up error details:", {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+          // Attempting to extract any additional details
+          details: error.stack || JSON.stringify(error),
+        });
         throw error
       }
 
-      console.log("Sign-up response:", data);
+      console.log("🔍 DEBUG: Sign-up response:", data);
 
       // In development, we can automatically redirect to sign-in
       // In production, this would redirect to a verification page
       if (data.user) {
-        // For development, we'll show a success message with test credentials
+        // Log the successful registration in our audit system
+        try {
+          // Get IP address from client (in a real app, you'd get this from a server API)
+          const ipAddress = "client-side-ip-unavailable";
+          
+          // Get user agent
+          const userAgent = navigator.userAgent;
+          
+          // Log the registration
+          await supabase.rpc('log_user_registration', {
+            p_user_id: data.user.id,
+            p_email: data.user.email,
+            p_ip_address: ipAddress,
+            p_user_agent: userAgent
+          });
+          
+          console.log("🔍 DEBUG: Registration audit log created");
+        } catch (logError) {
+          // Don't fail registration if logging fails
+          console.error("🔍 DEBUG: Failed to create audit log:", logError);
+        }
+        
+        // Production-ready behavior - redirect to email confirmation page
         setError(null);
-        alert(`Account created! For testing, you can sign in with:\nEmail: ${formData.email}\nPassword: ${formData.password}`);
-        router.push("/auth/sign-in");
+        router.push("/auth/verification?email=" + encodeURIComponent(formData.email));
       }
     } catch (error: any) {
-      console.error("Sign-up error:", error);
+      console.error("🔍 DEBUG: Sign-up catch block error:", error);
       setError(error.message || "Failed to sign up");
     } finally {
       setLoading(false)

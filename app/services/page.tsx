@@ -383,21 +383,50 @@ function ServicesContent() {
     try {
         // Get auth token from supabase client for Authorization header
         // This will help with the session issues in the API route
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          debugLog('[DEBUG] Error getting session:', sessionError.message);
+          toast.error("Session error. Please try refreshing the page.");
+          setIsLoading(false);
+          return;
+        }
+        
+        if (!sessionData?.session) {
+          debugLog('[DEBUG] No active session found');
+          toast.error("No active session. Please log in again.");
+          setIsLoading(false);
+          return;
+        }
+        
+        // Make sure we have a valid token
+        const accessToken = sessionData.session.access_token;
+        
+        if (!accessToken) {
+          debugLog('[DEBUG] No access token in session');
+          toast.error("Authentication error. Please log in again.");
+          setIsLoading(false);
+          return;
+        }
+        
+        debugLog(`[DEBUG] Access token (truncated): ${accessToken.substring(0, 15)}...`);
+        debugLog(`[DEBUG] Token length: ${accessToken.length}`);
+        
+        // Log session expiry for debugging
+        if (sessionData.session.expires_at) {
+          const expiresAt = new Date(sessionData.session.expires_at * 1000);
+          const now = new Date();
+          const minutesRemaining = Math.floor((expiresAt.getTime() - now.getTime()) / 1000 / 60);
+          debugLog(`[DEBUG] Session expires in ${minutesRemaining} minutes`);
+        }
         
         // Create headers object with potential Authorization
         const headers: HeadersInit = {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
         };
         
-        // Add Authorization header if we have a token
-        if (accessToken) {
-            headers['Authorization'] = `Bearer ${accessToken}`;
-            debugLog('[DEBUG] Adding Authorization header with token');
-        } else {
-            debugLog('[DEBUG] No access token available for Authorization header');
-        }
+        debugLog('[DEBUG] Adding Authorization header with token');
 
         const response = await fetch('/api/shipments/create-with-items', {
             method: 'POST',
@@ -405,13 +434,19 @@ function ServicesContent() {
             body: JSON.stringify(apiData),
         });
 
+        // Log response status for debugging
+        debugLog(`[DEBUG] API response status: ${response.status}`);
+        
         const result = await response.json();
+        debugLog(`[DEBUG] API response body:`, result);
 
         if (!response.ok) {
             // Handle specific errors from the API
             if (response.status === 400 && result.error === 'Insufficient wallet balance') {
                  toast.error("Insufficient wallet balance. Please fund your wallet.");
-          } else {
+            } else if (response.status === 401) {
+                 toast.error("Authentication failed. Please try logging out and back in.");
+            } else {
                 toast.error(`Error: ${result.error || 'Failed to book shipment.'}`);
             }
             throw new Error(result.error || `HTTP error ${response.status}`);

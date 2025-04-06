@@ -198,100 +198,53 @@ export default function SignInPage() {
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
-    setDebugInfo(null)
     setLoading(true)
-    
-    // ADDED: Clear stale cookies before signing in
-    clearStaleSupabaseCookies();
-    
-    console.log("Sign-in attempt started with email:", email)
 
     try {
-      console.log("Calling supabase.auth.signInWithPassword with:", { email })
-      const supabase = createBrowserClient();
+      console.log("🔍 DEBUG: Starting sign-in process with email:", email);
       
-      // Explicitly log out first to clear any potential stale session state
-      console.log("Explicitly signing out first to ensure clean state");
-      await supabase.auth.signOut();
+      const supabase = createBrowserClient()
+      console.log("🔍 DEBUG: Supabase client created");
       
-      // Sign in with a small delay to ensure previous signout has processed
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      console.log("Now attempting to sign in");
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
 
-      console.log("Sign-in API response received")
-      
       if (error) {
-        console.error("Sign-in error:", error.message, error)
+        console.error("🔍 DEBUG: Sign-in error:", {
+          message: error.message,
+          status: error.status,
+          name: error.name
+        });
         throw error
       }
 
-      console.log("Sign-in successful, user data:", data.user ? {
-        id: data.user.id,
-        email: data.user.email,
-        hasMetadata: !!data.user.user_metadata
-      } : 'No user data')
-      
-      console.log("Session data:", data.session ? {
-        access_token: data.session.access_token ? `${data.session.access_token.substring(0, 10)}...` : null,
-        refresh_token: data.session.refresh_token ? `${data.session.refresh_token.substring(0, 10)}...` : null,
-        expires_at: data.session.expires_at
-      } : 'No session data')
+      console.log("🔍 DEBUG: Sign-in successful, session:", {
+        has_access_token: !!data?.session?.access_token,
+        user_id: data?.session?.user?.id,
+        expires_at: data?.session?.expires_at ? new Date(data.session.expires_at * 1000).toISOString() : null
+      });
 
-      if (data.user && data.session) {
-        console.log("User authenticated successfully");
-        
-        // Debug JWT token data
-        if (data.session.access_token) {
-          console.log("Debugging access token from successful login:");
-          debugJwtToken(data.session.access_token);
-        }
-        
-        // Double-check session via getSession to ensure it was saved properly
-        console.log("Verifying session was properly saved via getSession");
-        const sessionCheck = await supabase.auth.getSession();
-        console.log("getSession result:", sessionCheck.data.session ? "Session exists" : "No session");
-        
-        // Debug getSession response
-        if (sessionCheck.data.session) {
-          console.log("Session after getSession:", {
-            user: sessionCheck.data.session.user ? "Present" : "Missing",
-            access_token: sessionCheck.data.session.access_token ? "Present" : "Missing",
-            refresh_token: sessionCheck.data.session.refresh_token ? "Present" : "Missing"
-          });
-        } else {
-          console.log("No session returned from getSession");
-        }
-        
-        // Set debug info to show success
-        setDebugInfo("Authentication successful! Redirecting to dashboard...");
-        
-        // Wait a bit longer to ensure session data is properly stored
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Force a hard reload to ensure the browser picks up the new session
-        window.location.href = "/";
-      } else {
-        // Just in case we get no data but also no error
-        console.warn("No user data returned, but no error either")
-        setError("Failed to sign in. Please check your credentials.")
+      // Add a delay to allow cookies to be set
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Check all cookies to verify auth cookies are set properly
+      if (typeof document !== 'undefined') {
+        const cookies = document.cookie.split(';').map(c => c.trim());
+        const authCookies = cookies.filter(c => c.includes('-auth-token'));
+        console.log(`🔍 DEBUG: After sign-in found ${authCookies.length} auth cookies:`, 
+          authCookies.map(c => c.split('=')[0])); // Only log the cookie names, not values
       }
-    } catch (error: any) {
-      console.error("Sign-in catch block error:", error)
-      setError(error.message || "Failed to sign in. Please check your credentials.")
-      
-      // Add debug information
-      const cookies = document.cookie.split(';').map(c => c.trim());
-      setDebugInfo(`Debug info:
-- Browser cookies: ${cookies.join(', ')}
-- Local storage auth key exists: ${!!localStorage.getItem('sb-rtbqpprntygrgxopxoei-auth-token')}
-- Error details: ${error.message || 'Unknown error'}
 
-If you continue to experience issues, try clearing your browser cookies and local storage, then try again.`);
+      // Get redirect path from query parameters
+      const params = new URLSearchParams(window.location.search)
+      const redirectTo = params.get("redirectTo") || "/"
+      
+      router.push(redirectTo)
+    } catch (error: any) {
+      console.error("🔍 DEBUG: Sign-in catch block error:", error);
+      setError(error.message)
     } finally {
       setLoading(false)
     }
